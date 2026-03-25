@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """The plot tool"""
 
 import os
@@ -20,12 +19,11 @@ import re
 import matplotlib as mpl
 import numpy as np
 
-from tools.data.data_managers import print_and_log
+from tools.data_managers import print_and_log
 
 mpl.use("Agg")
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
-
 
 ########################################################################
 # MAIN PLOTTING FUNCTION

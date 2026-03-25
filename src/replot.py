@@ -11,20 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""Module, for manual replotting of a generated_data/timestamp."""
+"""Module, for manual replotting of a generated_data/timestamp
+No big changed from original"""
 
 import os
 
-from tools.data.data_managers import get_last_experiment_idx
+from tools.data_managers import get_last_experiment_idx
 from tools.plot_hub import find_if_common_initial_plateaus, generate_all_plots
 
-#######################################################################
-# Parameters for the replotting script 
-#######################################################################
 
+# ------- Parameters for the replotting script --------------
 # EXAMPLE TO EDIT PARAMETERS:
-time_stamp_to_replot = "2025-08-06__00-23-46" 
+time_stamp_to_replot = "2026-03-23__14-41-35" 
 max_fidelity = 0.99
 x_label = "Ancilla Topology"
 run_names = [
@@ -37,9 +35,8 @@ run_names = [
 # STOP EDITING HERE
 
 
-#######################################################################
-# Replotting script for the specified experiment
-#######################################################################
+
+# -------------- Replotting script for the specified experiment --------------
 # Path to the experiment folder
 base_path = os.path.join("generated_data", time_stamp_to_replot)
 log_path = os.path.join(base_path, "replot_log.txt")

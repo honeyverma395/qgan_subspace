@@ -11,89 +11,55 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Cost and Fidelity Functions"""
+"""Cost and Fidelity Functions — PyTorch version.
 
+Reduced from the original cost_functions.py:
+    - braket()                    -> REMOVED (replaced by torch.vdot in dis/gen compute_loss)
+    - compute_fidelity()          -> kept, torch version
+    - compute_fidelity_and_cost() -> kept, calls dis.compute_loss
+
+Since the discriminator and generator now compute their own losses
+internally via torch.trace and autograd, this module only needs to
+provide evaluation metrics for logging during training.
+"""
+
+import torch
 import numpy as np
-
 from config import CFG
 
-np.random.seed()
+def compute_fidelity(final_target_state: torch.Tensor,
+                     final_gen_state: torch.Tensor) -> float:
+    """Calculate the fidelity between target and generated states.
 
-
-def braket(*args) -> float:
-    """Calculate the braket (inner product) between two quantum states.
+    Fidelity = |<target|gen>|^2 (for pure states)
 
     Args:
-        args: The arguments can be either two vectors (bra and ket), three (bra, operator, ket) or bigger (bra, operator^N, ket).
+        final_target_state: Target state, shape (d,) or (d, 1).
+        final_gen_state: Generator state, shape (d,) or (d, 1).
 
     Returns:
-        float: The inner product of the two vectors.
+        float: fidelity ∈ [0, 1].
     """
-    bra, *ops, ket = args
+    t = final_target_state.reshape(-1)
+    g = final_gen_state.reshape(-1)
+    overlap = torch.vdot(t, g) #better to use .vdot than .dot(t.conj(), g)
+    return float(torch.abs(overlap) ** 2)
 
-    for op in ops:
-        ket = np.matmul(op, ket)
-    return np.matmul(bra.getH(), ket)
-
-
-def compute_cost(dis, final_target_state: np.ndarray, final_gen_state: np.ndarray) -> float:
-    """Calculate the cost function. Which is basically equivalent to the Wasserstein distance.
-
-    Args:
-        dis (Discriminator): the discriminator.
-        final_target_state (np.ndarray): the target state to input into the Discriminator.
-        final_gen_state (np.ndarray): the gen state to input into the Discriminator.
-
-    Returns:
-        float: the cost function.
-    """
-    A, B, psi, phi = dis.get_dis_matrices_rep()
-
-    # Calculate the terms for the cost function
-    psiterm = np.ndarray.item(braket(final_target_state, psi, final_target_state))
-    phiterm = np.ndarray.item(braket(final_gen_state, phi, final_gen_state))
-
-    # fmt: off
-    term1 = braket(final_gen_state, A, final_gen_state) * braket(final_target_state, B, final_target_state)
-    term2 = braket(final_target_state, A, final_gen_state) * braket(final_gen_state, B, final_target_state)
-    term3 = braket(final_gen_state, A, final_target_state) * braket(final_target_state, B, final_gen_state)
-    term4 = braket(final_target_state, A, final_target_state) * braket(final_gen_state, B, final_gen_state)
-
-    regterm = np.ndarray.item(CFG.lamb / np.e * (CFG.cst1 * term1 - CFG.cst2 * (term2 + term3) + CFG.cst3 * term4))
-    # fmt: on
-
-    loss = np.real(psiterm - phiterm - regterm)
-
-    return loss
-
-
-def compute_fidelity(final_target_state: np.ndarray, final_gen_state: np.ndarray) -> float:
-    """Calculate the fidelity between target state and gen state
+def compute_fidelity_and_cost(dis, final_target_state: torch.Tensor,
+                               final_gen_state: torch.Tensor) -> tuple[float, float]:
+    """Calculate both fidelity and cost for logging.
 
     Args:
-        final_target_state (np.ndarray): The final target state of the system.
-        final_gen_state (np.ndarray): The final gen state of the system.
+        dis: Discriminator (torch version).
+        final_target_state: Target state.
+        final_gen_state: Generator state.
 
     Returns:
-        float: the fidelity between the target state and the gen state.
-    """
-    braket_result = braket(final_target_state, final_gen_state)
-    return np.abs(np.ndarray.item(braket_result)) ** 2
-    # return np.abs(np.asscalar(np.matmul(target_state.getH(), total_final_state))) ** 2
-
-
-def compute_fidelity_and_cost(dis, final_target_state: np.ndarray, final_gen_state: np.ndarray) -> tuple[float, float]:
-    """Calculate the fidelity and cost function
-
-    Args:
-        dis (Discriminator): the discriminator.
-        final_target_state (np.ndarray): the target state.
-        final_gen_state (np.ndarray): the gen state.
-
-    Returns:
-        tuple[float, float]: the fidelity and cost function.
+        (fidelity, cost): both as floats.
     """
     fidelity = compute_fidelity(final_target_state, final_gen_state)
-    cost = compute_cost(dis, final_target_state, final_gen_state)
+    with torch.no_grad():
+        neg_cost = dis.compute_loss(final_target_state, final_gen_state)
 
+    cost = float(-neg_cost)
     return fidelity, cost
