@@ -122,7 +122,6 @@ class Config:
         #   Available: "X", "Y", "Z", "XX", "YY", "ZZ"
 
         self.gen_layers: int = 3
-
         self.gen_ansatz: Literal["ZZ_YY_XX_Z", "ZZ_Z_X", "custom"] = "ZZ_Z_X"
         self.custom_ansatz_terms: Optional[list[str]] = ["ZZ", "XX", "Y", "X"]
 
