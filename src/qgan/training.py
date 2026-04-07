@@ -20,8 +20,7 @@ What changes:
     - States are torch tensors instead of numpy matrices.
     - Ancilla processing uses the torch functions from generator_torch.py.
     - cost_functions reduced to fidelity + cost evaluation (no braket).
-    - save_model uses torch.save for the discriminator, pickle for the generator
-      (which handles its own __getstate__/__setstate__).
+    - save_model uses torch.save for both generator and discriminator.
 
 The training loop logic is unchanged from the original:
     1. Process ancilla on generator output.

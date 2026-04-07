@@ -20,8 +20,6 @@ Changes from original:
     - The function 'save_gen_final_params(gen, file_path)'
 """
 import os
-import pickle
-
 import numpy as np
 
 
@@ -45,16 +43,6 @@ def print_and_log_with_headers(param, file_path):
     print_and_log(f"\n{'=' * 60}", file_path)
     print_and_log(param, file_path)
     print_and_log(f"\n{'=' * 60}", file_path)
-
-def save_model(model, file_path):
-    """ Uses the Pickle library to save the model object (its weights, architecture, etc.) 
-    in binary format (‘wb+’).This means that if training is interrupted, we can load the 
-    .pkl file and continue where we left
-    """
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "wb+") as file:
-        pickle.dump(model, file)
-
 
 def save_fidelity_loss(fidelities_history, losses_history, file_path):
     """Save two lists of numbers: fidelities and losses.

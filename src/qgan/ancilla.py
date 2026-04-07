@@ -13,7 +13,6 @@
 # limitations under the License.
 """Ancilla post-processing tools — PennyLane rewrite.
 
-Unchanged:
     get_max_entangled_state_with_ancilla_if_needed(size) -> (gen_state, target_state)
     project_ancilla_zero(state, renormalize)              -> (projected_state, prob)
     trace_out_ancilla(state)                              -> sampled_state

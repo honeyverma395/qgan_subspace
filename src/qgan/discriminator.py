@@ -21,8 +21,7 @@ Changes from PennyLane/numpy version:
     - Manual gradient methods (_compute_grad, _grad_alpha, _grad_beta,
       _grad_psi_or_phi) are REMOVED entirely.
     - Momentum SGD via torch.optim.SGD(momentum=...).
-    - Loss computed via density matrices and torch.trace
-      Cross terms like <target|A|gen>·<gen|B|target> become Tr[A·rho_g·B·rho_t].
+    - Loss computed via torch.vdot()
     - save/load preserved, adapted for torch state_dict.
 
 The discriminator MAXIMISES the Wasserstein cost:
@@ -31,7 +30,6 @@ We put a minus sign and call optimizer.step() to minimise (−Loss).
 """
 
 import os
-from copy import deepcopy
 
 import numpy as np
 import torch
@@ -185,36 +183,31 @@ class Discriminator(nn.Module):
         torch.save(save_dict, file_path)
 
     def load_model_params(self, file_path: str) -> bool:
-        """Load discriminator parameters from a saved model.
-
-        Supports loading from:
-            1. New torch format (state_dict + metadata)
-            2. Old numpy/pickle format (for backward compatibility)
+        """Load discriminator parameters from a saved model (torch format only).
         """
         if not os.path.exists(file_path):
             print_and_log("Discriminator model file not found\n", CFG.log_path)
             return False
 
-        # Try torch format first
         try:
             saved = torch.load(file_path, weights_only=False)
-            if isinstance(saved, dict) and "state_dict" in saved:
-                return self._load_from_torch_format(saved)
-        except Exception:
-            pass
-
-        # Fall back to old pickle format
-        try:
-            import pickle
-            with open(file_path, "rb") as f:
-                saved_dis = pickle.load(f)
-            return self._load_from_pickle_format(saved_dis)
-        except (OSError, pickle.UnpicklingError) as e:
+        except Exception as e:
             print_and_log(
-                f"ERROR: Could not load discriminator model: {e}\n", CFG.log_path
+                f"ERROR: Could not load discriminator model: {e}\n"
+                "Old pickle/numpy formats are no longer supported.\n",
+                CFG.log_path,
             )
             return False
 
+        if not isinstance(saved, dict) or "state_dict" not in saved:
+            print_and_log(
+                "ERROR: Unrecognised format. Only torch dict format is supported.\n",
+                CFG.log_path,
+            )
+            return False
+
+        return self._load_from_torch_format(saved)
+    
     def _load_from_torch_format(self, saved: dict) -> bool:
         """Load from new torch save format."""
         # Compatibility checks
@@ -249,39 +242,3 @@ class Discriminator(nn.Module):
         print_and_log("ERROR: incompatible discriminator (size mismatch).\n", CFG.log_path)
         return False
 
-    def _load_from_pickle_format(self, saved_dis) -> bool:
-        """Load from old numpy/pickle format (backward compatibility)."""
-        cant_load = False
-        if saved_dis.target_size != self.target_size:
-            print_and_log("ERROR: target size mismatch.\n", CFG.log_path)
-            cant_load = True
-        if saved_dis.target_hamiltonian != self.target_hamiltonian:
-            print_and_log("ERROR: target hamiltonian mismatch.\n", CFG.log_path)
-            cant_load = True
-        if cant_load:
-            return False
-
-        if saved_dis.size == self.size:
-            with torch.no_grad():
-                self.alpha.copy_(torch.from_numpy(saved_dis.alpha))
-                self.beta.copy_(torch.from_numpy(saved_dis.beta))
-            print_and_log("Discriminator parameters loaded (pickle -> torch).\n", CFG.log_path)
-            return True
-
-        if abs(saved_dis.size - self.size) == 1:
-            min_size = min(saved_dis.size, self.size)
-            with torch.no_grad():
-                self.alpha[:min_size] = torch.from_numpy(
-                    saved_dis.alpha[:min_size].copy()
-                )
-                self.beta[:min_size] = torch.from_numpy(
-                    saved_dis.beta[:min_size].copy()
-                )
-            print_and_log(
-                "Discriminator parameters partially loaded (\pm1 qubit, pickle -> torch).\n",
-                CFG.log_path,
-            )
-            return True
-
-        print_and_log("ERROR: incompatible discriminator (size mismatch).\n", CFG.log_path)
-        return False

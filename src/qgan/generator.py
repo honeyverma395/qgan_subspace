@@ -28,7 +28,6 @@ Everything else is preserved:
 """
 
 import os
-import pickle
 from typing import Optional
 
 import numpy as np
@@ -78,6 +77,14 @@ def _get_ansatz_terms() -> list[str]:
         f"Expected one of: {list(_PREDEFINED_ANSATZ.keys())} or 'custom'."
     )
 
+def _layer_coupling(layer_idx: int) -> bool:
+    """Check if a given layer should have ancilla 2q couplings.
+    Returns:
+        True if ancilla 2q couplings should be applied in this layer.
+    """
+    if CFG.ancilla_coupling_layers == "all":
+        return True
+    return layer_idx in CFG.ancilla_coupling_layers
 
 # -- DEVICE ----------------------------------------------------------------
 def _make_device(total_wires: int):
@@ -104,20 +111,21 @@ class Ansatz:
         n_sys = len(system_wires)
         idx = 0
 
-        for _ in range(CFG.gen_layers):
+        terms_1q = [t for t in terms if t in _1Q_GATES]
+        terms_2q = [t for t in terms if t in _2Q_GATES]
+
+        for layer_idx in range(CFG.gen_layers):
             # -- System gates from term list --
-            for term in terms:
-                if term in _1Q_GATES:
-                    gate_fn = _1Q_GATES[term]
-                    for w in system_wires:
-                        gate_fn(params[idx], wires=w);  idx += 1
-                elif term in _2Q_GATES:
-                    gate_fn = _2Q_GATES[term]
-                    for i in range(n_sys - 1):
-                        gate_fn(params[idx], wires=[system_wires[i], system_wires[i + 1]])
-                        idx += 1
-                else:
-                    raise ValueError(f"Unknown gate term: {term}")
+            # We apply the gates in this order RX, RZ, RX, RZ... 
+            for w in system_wires:
+                for term in terms_1q:
+                    _1Q_GATES[term](params[idx], wires=w);  idx += 1
+
+            for term in terms_2q:
+                gate_fn = _2Q_GATES[term]
+                for i in range(n_sys - 1):
+                    gate_fn(params[idx], wires=[system_wires[i], system_wires[i + 1]])
+                    idx += 1
 
             # -- Ancilla 1q gates --
             if ancilla_wire is not None and CFG.do_ancilla_1q_gates:
@@ -126,10 +134,12 @@ class Ansatz:
                         _1Q_GATES[term](params[idx], wires=ancilla_wire);  idx += 1
 
             # -- Ancilla 2q couplings --
-            if ancilla_wire is not None:
+            if ancilla_wire is not None and _layer_coupling(layer_idx):
                 idx = Ansatz._apply_ancilla_couplings(
                     params, idx, terms, system_wires, ancilla_wire
                 )
+
+
 
     @staticmethod
     def _apply_ancilla_couplings(params, idx: int, terms: list[str],
@@ -183,14 +193,14 @@ def count_params(n_system: int, has_ancilla: bool) -> int:
     n_1q_terms = sum(1 for t in terms if t in _1Q_GATES)
     n_2q_terms = sum(1 for t in terms if t in _2Q_GATES)
 
-    for _ in range(CFG.gen_layers):
+    for layer_idx in range(CFG.gen_layers):
         n += n_1q_terms * n_system
         n += n_2q_terms * (n_system - 1)
 
         if has_ancilla and CFG.do_ancilla_1q_gates:
             n += n_1q_terms
 
-        if has_ancilla:
+        if has_ancilla and _layer_coupling(layer_idx):
             n += _count_ancilla_coupling_params(n_2q_terms, n_system)
 
     return n
@@ -332,7 +342,7 @@ class Generator:
         indices = []
         idx = 0
 
-        for _ in range(CFG.gen_layers):
+        for layer_idx in range(CFG.gen_layers):
             # System 1q + 2q gates (skip)
             idx += n_1q_terms * n_sys
             idx += n_2q_terms * (n_sys - 1)
@@ -343,9 +353,10 @@ class Generator:
                     indices.append(idx);  idx += 1
 
             # Ancilla 2q couplings
-            n_anc_2q = _count_ancilla_coupling_params(n_2q_terms, n_sys)
-            for _ in range(n_anc_2q):
-                indices.append(idx);  idx += 1
+            if _layer_coupling(layer_idx):
+                n_anc_2q = _count_ancilla_coupling_params(n_2q_terms, n_sys)
+                for _ in range(n_anc_2q):
+                    indices.append(idx);  idx += 1
 
         return indices
 
@@ -420,97 +431,53 @@ class Generator:
         with torch.no_grad():
             self.total_gen_state = self.get_total_gen_state()
 
-    # -- pickle support ----------------------------------------------------
-    def __getstate__(self):
-        """Exclude non-picklable objects (QNode, optimizer) from serialisation."""
-        state = self.__dict__.copy()
-        state.pop('circuit', None)
-        state.pop('optimizer', None)
-        # Convert torch tensors to numpy for portability
-        if isinstance(state.get('params'), torch.Tensor):
-            state['params'] = state['params'].detach().numpy()
-        if isinstance(state.get('total_gen_state'), torch.Tensor):
-            state['total_gen_state'] = state['total_gen_state'].detach().numpy()
-        return state
-
-    def __setstate__(self, state):
-        """Restore from pickle: rebuild QNode, optimizer, and torch tensors."""
-        self.__dict__.update(state)
-        # Rebuild circuit
-        self.circuit = _build_qnode()
-        # Convert params back to torch
-        if isinstance(self.params, np.ndarray):
-            self.params = torch.tensor(self.params, dtype=torch.float64, requires_grad=True)
-        # Rebuild optimizer
-        self.optimizer = torch.optim.SGD(
-            [self.params],
-            lr=CFG.l_rate,
-            momentum=CFG.momentum_coeff,
-        )
-        # Rebuild cached state
-        if isinstance(self.total_gen_state, np.ndarray):
-            with torch.no_grad():
-                self.total_gen_state = self.get_total_gen_state()
-
     # -- SAVE / LOAD -------------------------------------------------------
     def save_model(self, file_path: str):
-        """Save generator state to disk.
-
-        Saves parameters as numpy (portable), plus all metadata
-        for compatibility checks.
-        """
+        """Save generator state to disk (torch dict format)."""
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         save_dict = {
             "params": self.params.detach().numpy(),
             "size": self.size,
             "ancilla": self.ancilla,
             "ancilla_topology": self.ancilla_topology,
+            "ancilla_coupling_layers": self.ancilla_coupling_layers,
             "ansatz": self.ansatz,
             "layers": self.layers,
             "target_size": self.target_size,
             "target_hamiltonian": self.target_hamiltonian,
             "n_params": self.n_params,
-            # Optimizer state (momentum buffers etc.)
             "optimizer_state": self.optimizer.state_dict(),
         }
         torch.save(save_dict, file_path)
-
+ 
     def load_model_params(self, file_path: str) -> bool:
-        """Load generator parameters from a saved model.
+        """Load generator parameters from a saved model
         """
         if not os.path.exists(file_path):
             print_and_log("ERROR: Generator model file not found\n", CFG.log_path)
             return False
-
-        # Try new torch dict format first
+ 
         try:
             saved = torch.load(file_path, weights_only=False)
-            if isinstance(saved, dict) and "params" in saved:
-                return self._load_from_torch_dict(saved)
-        except Exception:
-            pass
-
-        # Fall back to old pickle format
-        try:
-            with open(file_path, "rb") as f:
-                saved = pickle.load(f)
-        except (OSError, pickle.UnpicklingError) as e:
-            print_and_log(f"ERROR: Could not load generator model: {e}\n", CFG.log_path)
+        except Exception as e:
+            print_and_log(
+                f"ERROR: Could not load generator model: {e}\n"
+                "Old pickle/numpy formats are no longer supported.\n",
+                CFG.log_path,
+            )
             return False
-
-        # Old format: pickled Generator object with .params (numpy)
-        if hasattr(saved, 'params') and isinstance(saved.params, np.ndarray):
-            return self._load_from_old_numpy(saved)
-        # Very old format: pickled Generator with .qc.gates
-        if hasattr(saved, 'qc'):
-            return self._load_from_old_qc(saved)
-
-        print_and_log("ERROR: Unrecognised saved generator format.\n", CFG.log_path)
-        return False
-
+ 
+        if not isinstance(saved, dict) or "params" not in saved:
+            print_and_log(
+                "ERROR: Unrecognised format. Only torch dict format is supported.\n",
+                CFG.log_path,
+            )
+            return False
+ 
+        return self._load_from_torch_dict(saved)
+ 
     def _load_from_torch_dict(self, saved: dict) -> bool:
-        """Load from new torch save_model format."""
-        # Compatibility checks
+        """Load from torch save_model format."""
         cant_load = False
         if saved.get("target_size") != self.target_size:
             print_and_log("ERROR: target size mismatch.\n", CFG.log_path);  cant_load = True
@@ -525,11 +492,11 @@ class Generator:
             print_and_log("ERROR: ancilla topology mismatch.\n", CFG.log_path);  cant_load = True
         if cant_load:
             return False
-
+ 
         saved_params = saved["params"]
         saved_size = saved.get("size", 0)
         saved_ancilla = saved.get("ancilla", False)
-
+ 
         # Exact match
         if saved_size == self.size and saved_ancilla == self.ancilla:
             if len(saved_params) != self.n_params:
@@ -542,126 +509,56 @@ class Generator:
             self._refresh_state()
             print_and_log("Generator parameters loaded (torch dict format).\n", CFG.log_path)
             return True
-
-        # \pm1 qubit (ancilla difference)
+ 
+        # \pm 1 qubit (ancilla difference)
         if saved_ancilla != self.ancilla and abs(saved_size - self.size) == 1:
             self._partial_load_params(saved_params, saved_ancilla,
-                                      saved.get("ancilla_topology"))
+                                      saved.get("ancilla_topology"),
+                                      saved.get("ancilla_coupling_layers", "all"))
             self._refresh_state()
             print_and_log("Generator parameters partially loaded (ancilla diff, torch dict).\n",
                           CFG.log_path)
             return True
-
+ 
         print_and_log("ERROR: incompatible generator.\n", CFG.log_path)
         return False
-
-    def _load_from_old_numpy(self, saved) -> bool:
-        """Load from old pickle format with .params as numpy array."""
-        cant_load = False
-        if saved.target_size != self.target_size:
-            print_and_log("ERROR: target size mismatch.\n", CFG.log_path);  cant_load = True
-        if saved.target_hamiltonian != self.target_hamiltonian:
-            print_and_log("ERROR: target hamiltonian mismatch.\n", CFG.log_path);  cant_load = True
-        if saved.ansatz != self.ansatz:
-            print_and_log("ERROR: ansatz mismatch.\n", CFG.log_path);  cant_load = True
-        if saved.layers != self.layers:
-            print_and_log("ERROR: layer count mismatch.\n", CFG.log_path);  cant_load = True
-        if (saved.ancilla and self.ancilla
-                and getattr(saved, 'ancilla_topology', None) != self.ancilla_topology):
-            print_and_log("ERROR: ancilla topology mismatch.\n", CFG.log_path);  cant_load = True
-        if cant_load:
-            return False
-
-        if saved.size == self.size and saved.ancilla == self.ancilla:
-            if len(saved.params) != self.n_params:
-                print_and_log("ERROR: param count mismatch.\n", CFG.log_path)
-                return False
-            with torch.no_grad():
-                self.params.copy_(torch.from_numpy(saved.params).to(torch.float64))
-            self._refresh_state()
-            print_and_log("Generator parameters loaded (old numpy -> torch).\n", CFG.log_path)
-            return True
-
-        if saved.ancilla != self.ancilla and abs(saved.size - self.size) == 1:
-            self._partial_load_params(saved.params, saved.ancilla,
-                                      getattr(saved, 'ancilla_topology', None))
-            self._refresh_state()
-            print_and_log("Generator parameters partially loaded (old numpy, ancilla diff).\n",
-                          CFG.log_path)
-            return True
-
-        print_and_log("ERROR: incompatible generator.\n", CFG.log_path)
-        return False
-
-    def _load_from_old_qc(self, saved) -> bool:
-        """Load from very old format with .qc.gates list."""
-        cant_load = False
-        if saved.target_size != self.target_size:
-            print_and_log("ERROR: target size mismatch.\n", CFG.log_path);  cant_load = True
-        if saved.target_hamiltonian != self.target_hamiltonian:
-            print_and_log("ERROR: target hamiltonian mismatch.\n", CFG.log_path);  cant_load = True
-        if saved.ansatz != self.ansatz:
-            print_and_log("ERROR: ansatz mismatch.\n", CFG.log_path);  cant_load = True
-        if saved.layers != self.layers:
-            print_and_log("ERROR: layer count mismatch.\n", CFG.log_path);  cant_load = True
-        if cant_load:
-            return False
-
-        old_angles = np.array([g.angle for g in saved.qc.gates])
-
-        if saved.size == self.size and saved.ancilla == self.ancilla:
-            if len(old_angles) != self.n_params:
-                print_and_log("ERROR: gate count mismatch.\n", CFG.log_path)
-                return False
-            with torch.no_grad():
-                self.params.copy_(torch.from_numpy(old_angles).to(torch.float64))
-            self._refresh_state()
-            print_and_log("Generator parameters loaded (old qc format -> torch).\n", CFG.log_path)
-            return True
-
-        if saved.ancilla != self.ancilla and abs(saved.size - self.size) == 1:
-            self._partial_load_params(old_angles, saved.ancilla,
-                                      getattr(saved, 'ancilla_topology', None))
-            self._refresh_state()
-            print_and_log("Generator parameters partially loaded (old qc, ancilla diff).\n",
-                          CFG.log_path)
-            return True
-
-        print_and_log("ERROR: incompatible old-format generator.\n", CFG.log_path)
-        return False
-
+ 
     def _partial_load_params(self, saved_params: np.ndarray,
                               saved_ancilla: bool,
-                              saved_topology: Optional[str]) -> None:
+                              saved_topology: Optional[str],
+                              saved_coupling_layers=None) -> None:
         """Load system-only params when ancilla is added/removed.
-
-        Same logic as original: identify ancilla param indices in both
-        saved and current configs, extract system-only params, and copy.
+ 
+        Identifies ancilla param indices in both saved and current configs,
+        extracts system-only params, and copies them.
         """
         my_ancilla_idx = set(self._get_ancilla_param_indices()) if self.ancilla else set()
-
+ 
         saved_ancilla_idx = set()
         if saved_ancilla:
             # Temporarily swap config to compute saved model's ancilla indices
             orig_extra = CFG.extra_ancilla
             orig_topo = CFG.ancilla_topology
             orig_1q = CFG.do_ancilla_1q_gates
+            orig_coupling_layers = CFG.ancilla_coupling_layers
             CFG.extra_ancilla = saved_ancilla
             CFG.ancilla_topology = saved_topology or CFG.ancilla_topology
             CFG.do_ancilla_1q_gates = getattr(CFG, 'do_ancilla_1q_gates', True)
+            CFG.ancilla_coupling_layers = saved_coupling_layers if saved_coupling_layers is not None else "all"
             saved_ancilla_idx = set(self._get_ancilla_param_indices())
             CFG.extra_ancilla = orig_extra
             CFG.ancilla_topology = orig_topo
             CFG.do_ancilla_1q_gates = orig_1q
-
+            CFG.ancilla_coupling_layers = orig_coupling_layers
+ 
         saved_system = [p for i, p in enumerate(saved_params) if i not in saved_ancilla_idx]
         my_system_idx = [i for i in range(self.n_params) if i not in my_ancilla_idx]
-
+ 
         n_copy = min(len(saved_system), len(my_system_idx))
         with torch.no_grad():
             for j in range(n_copy):
                 self.params[my_system_idx[j]] = float(saved_system[j])
-
+ 
     def _refresh_state(self):
         """Recompute cached statevector from current parameters."""
         with torch.no_grad():

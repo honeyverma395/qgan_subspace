@@ -34,11 +34,11 @@ class Config:
         self.common_initial_plateaus: bool = True
 
         # If common_initial_plateaus:
-        self.N_initial_plateaus: int = 3
+        self.N_initial_plateaus: int = 10
         self.N_reps_each_init_plateau: int = 1
 
         # If not common_initial_plateaus:
-        self.N_reps_if_from_scratch: int = 1
+        self.N_reps_if_from_scratch: int = 100
 
         # Configurations to compare (each dict overrides CFG attributes):
         self.reps_new_config: list[dict[str, Any]] = [
@@ -49,6 +49,7 @@ class Config:
                 "ancilla_connect_to": None,
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": False,
+                "ancilla_coupling_layers": "all",
             },
             {
                 "extra_ancilla": True,
@@ -57,6 +58,7 @@ class Config:
                 "ancilla_connect_to": 1,
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": False,
+                "ancilla_coupling_layers": "all",
             },
             {
                 "extra_ancilla": True,
@@ -65,13 +67,32 @@ class Config:
                 "ancilla_connect_to": None,
                 "do_ancilla_1q_gates": False,
                 "start_ancilla_gates_randomly": False,
+                "ancilla_coupling_layers": "all",
+            },
+            {   
+                "extra_ancilla": True,
+                "ancilla_mode": "pass",
+                "ancilla_topology": "bridge",
+                "ancilla_connect_to": None,
+                "do_ancilla_1q_gates": True,
+                "start_ancilla_gates_randomly": False,
+                "ancilla_coupling_layers": [1], # 2nd layer
+            },
+            {   
+                "extra_ancilla": True,
+                "ancilla_mode": "pass",
+                "ancilla_topology": "bridge",
+                "ancilla_connect_to": None,
+                "do_ancilla_1q_gates": True,
+                "start_ancilla_gates_randomly": False,
+                "ancilla_coupling_layers": [2], # last layer
             },
         ]
 
         # -- Loading and warm start ----------------------------
         # Load a previous run by timestamp. Supports \pm 1 qubit (ancilla add/remove).
 
-        self.load_timestamp: Optional[str] = None #"2026-03-23__14-41-35"
+        self.load_timestamp: Optional[str] = "2026-04-03__13-16-57" #
         self.type_of_warm_start: Literal["none", "all", "some"] = "none"
         self.warm_start_strength: Optional[float] = 0.1
 
@@ -105,11 +126,12 @@ class Config:
         # Ancilla mode define what happens to the ancilla before Discriminator (ancilla.py)
         self.ancilla_mode: Optional[Literal["pass", "project", "trace"]] = "pass" 
         self.ancilla_project_norm: Optional[Literal["re-norm", "pass"]] = "re-norm"
-        self.ancilla_topology: Optional[Literal["disconnected", "ansatz", "bridge", "total", "fake"]] = "total"
+        self.ancilla_topology: Optional[Literal["disconnected", "ansatz", "bridge", "total", "fake"]] = "bridge"
         self.ancilla_connect_to: Optional[int] = None
         self.do_ancilla_1q_gates: bool = True
         self.start_ancilla_gates_randomly: bool = True
-
+        #If all layer have 2q coupling gates or not
+        self.ancilla_coupling_layers: Literal["all"] | list[int] = "all"
         # -- Generator ansatz ----------------------------
         #
         # Per layer, outer loop = gate type, inner loop = qubits.
