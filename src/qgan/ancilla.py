@@ -27,50 +27,38 @@ from config import CFG
 
 
 # -- MAXIMALLY ENTANGLED STATE PREPARATION -------------------
-def get_max_entangled_state_torch(size: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """Prepare |\Phi^+> on 2*size qubits, optionally tensored with |0> for ancilla.
-
-    Returns torch tensors (no gradient needed, since they are fixed input states).
+def get_max_entangled_state_with_ancilla_if_needed(size: int) -> np.ndarray:
+    """Get the maximally entangled state for the system size (With Ancilla if needed).
 
     Args:
-        size: Number of qubits per register (system_size).
+        size (int): the size of the system.
 
     Returns:
-        (initial_state_for_gen, initial_state_for_target):
-            Both as column vectors, shape (d, 1), complex128.
+        tuple[np.ndarray]: the maximally entangled states, plus ancilla if needed for generation and target.
     """
-    n_choi = 2 * size
-    dev = qml.device("default.qubit", wires=n_choi)
+    # Generate the maximally entangled state for the system size
+    state = np.zeros(2 ** (2 * size), dtype=complex)
+    dim_register = 2**size
+    for i in range(dim_register):
+        state[i * dim_register + i] = 1.0
+    state /= np.sqrt(dim_register)
 
-    @qml.qnode(dev, interface="numpy")
-    def bell_state_circuit():
-        for i in range(size):
-            qml.Hadamard(wires=i)
-            qml.CNOT(wires=[i, i + size])
-        return qml.state()
+    # Add ancilla qubit at the end, if needed
+    initial_state_with_ancilla = np.kron(state, np.array([1, 0], dtype=complex))
 
-    state_np = np.array(bell_state_circuit(), dtype=complex)
-    state = torch.tensor(state_np, dtype=torch.complex128)
+    # Different conditions for gen and target:
+    initial_state_for_gen = initial_state_with_ancilla if CFG.extra_ancilla else state
+    initial_state_for_target = initial_state_with_ancilla if CFG.extra_ancilla and CFG.ancilla_mode == "pass" else state
 
-    # Add ancilla |0> if needed
-    ancilla_zero = torch.tensor([1.0, 0.0], dtype=torch.complex128)
-    state_with_ancilla = torch.kron(state, ancilla_zero)
-
-    initial_for_gen = state_with_ancilla if CFG.extra_ancilla else state
-    initial_for_target = (
-        state_with_ancilla if CFG.extra_ancilla and CFG.ancilla_mode == "pass" else state
-    )
-
-    return initial_for_gen.reshape(-1, 1), initial_for_target.reshape(-1, 1)
+    return np.asmatrix(initial_state_for_gen).T, np.asmatrix(initial_state_for_target).T
 
 # -- ANCILLA POST-PROCESSING -----------------------------
-def _project_ancilla_zero_torch(state: torch.Tensor,
+def _project_ancilla_zero(state: torch.Tensor,
                                  renormalize: bool = True
                                  ) -> tuple[torch.Tensor, torch.Tensor]:
     """Project the last qubit onto |0> (torch version, differentiable).
 
     Keeps only the amplitudes where the ancilla is in |0> (even indices).
-    This is differentiable through autograd since it's just slicing + division.
 
     Args:
         state: Statevector as a 1D torch tensor, shape (2^N,).
@@ -103,7 +91,7 @@ def _project_ancilla_zero_torch(state: torch.Tensor,
     return projected.reshape(-1, 1), prob
 
 
-def _trace_out_ancilla_torch(state: torch.Tensor) -> torch.Tensor:
+def _trace_out_ancilla(state: torch.Tensor) -> torch.Tensor:
     """Trace out the last qubit and return a sampled pure state (torch version).
 
     This operation involves eigendecomposition + stochastic sampling,
@@ -133,7 +121,7 @@ def _trace_out_ancilla_torch(state: torch.Tensor) -> torch.Tensor:
     rho_np = rho_reduced.detach().numpy()
     eigvals, eigvecs = np.linalg.eigh(rho_np)
     eigvals = np.maximum(eigvals, 0)
-    eigvals = eigvals / np.sum(eigvals)
+    eigvals /= np.sum(eigvals)
 
     idx = np.random.choice(len(eigvals), p=eigvals)
     sampled = torch.tensor(eigvecs[:, idx], dtype=torch.complex128)
@@ -161,9 +149,9 @@ def get_final_gen_state_torch(total_output_state: torch.Tensor) -> torch.Tensor:
     if CFG.ancilla_mode == "pass":
         return total_output_state.reshape(-1, 1)
     if CFG.ancilla_mode == "project":
-        projected, _ = _project_ancilla_zero_torch(total_output_state)
+        projected, _ = _project_ancilla_zero(total_output_state)
         return projected
     if CFG.ancilla_mode == "trace":
-        return _trace_out_ancilla_torch(total_output_state)
+        return _trace_out_ancilla(total_output_state)
 
     raise ValueError(f"Unknown ancilla_mode: {CFG.ancilla_mode}")

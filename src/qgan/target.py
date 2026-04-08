@@ -109,8 +109,7 @@ def _build_hamiltonian(size: int, terms: list[str],
 
     for strength, term in zip(strengths, terms):
         if term == "I":
-            # Identity on full space: just a scalar shift to the energy.
-            # H += strength · I  (doesn't change eigenstates, only shifts eigenvalues)
+            # Identity on full space
             coeffs.append(strength)
             ops.append(qml.Identity(0))
 
@@ -134,7 +133,6 @@ def _build_hamiltonian(size: int, terms: list[str],
 
         elif len(term) == 4:
             # 4-body nearest-neighbour: e.g. "XXXX" -> \sum_i X_i·X_{i+1}·X_{i+2}·X_{i+3}
-            # Used in surface code stabilizers
             for i in range(size - 3):
                 coeffs.append(strength)
                 ops.append(_pauli_word(term, [i, i + 1, i + 2, i + 3]))
@@ -318,7 +316,7 @@ def get_final_target_state(final_input_state: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: Target state as column vector, ready for the discriminator.
     """
-    # Get the target unitary U = e^{-iH}
+    # Get the target unitary U = e^{-iH*t}
     target_unitary = get_target_unitary(CFG.target_hamiltonian, CFG.system_size)
 
     # I on Choi register \otimes U_target on system register

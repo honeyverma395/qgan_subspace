@@ -129,9 +129,8 @@ class Ansatz:
 
             # -- Ancilla 1q gates --
             if ancilla_wire is not None and CFG.do_ancilla_1q_gates:
-                for term in terms:
-                    if term in _1Q_GATES:
-                        _1Q_GATES[term](params[idx], wires=ancilla_wire);  idx += 1
+                for term in terms_1q:
+                    _1Q_GATES[term](params[idx], wires=ancilla_wire);  idx += 1
 
             # -- Ancilla 2q couplings --
             if ancilla_wire is not None and _layer_coupling(layer_idx):
@@ -293,6 +292,7 @@ class Generator:
         self.size: int = CFG.system_size + (1 if CFG.extra_ancilla else 0)
         self.ancilla: bool = CFG.extra_ancilla
         self.ancilla_topology: str = CFG.ancilla_topology
+        self.ancilla_coupling_layers = CFG.ancilla_coupling_layers
         self.ansatz: str = CFG.gen_ansatz
         self.layers: int = CFG.gen_layers
         self.target_size: int = CFG.system_size
@@ -313,7 +313,7 @@ class Generator:
             momentum=CFG.momentum_coeff,
         )
 
-        # -- cached state --
+        # -- state --
         self.total_gen_state: torch.Tensor = self.get_total_gen_state()
 
     # -- parameter initialisation ------------------------------------------
@@ -391,20 +391,21 @@ class Generator:
         t = final_target_state.reshape(-1)
 
         Ag = A @ g;  Bg = B @ g;  At = A @ t;  Bt = B @ t
-        term1 = torch.vdot(g, Ag)
-        term2 = torch.vdot(t, Bt)
-        term3 = torch.vdot(Bg, t)
-        term4 = torch.vdot(t, Ag)
-        term5 = torch.vdot(Ag, t)
-        term6 = torch.vdot(t, Bg)
-        term7 = torch.vdot(Bg, g)
-        term8 = torch.vdot(t, At)
+        # <g|A|g> · <t|B|t>
+        term1 = torch.vdot(g, Ag) * torch.vdot(t, Bt)
+        #cross terms: <t|A|g><g|B|t> + <g|A|t><t|B|g>
+        term2 = torch.vdot(g, At) * torch.vdot(t, Bg)
+        term3 = torch.vdot(t, Ag) * torch.vdot(g, Bt)
+        # <t|A|t> · <g|B|g>
+        term4 = torch.vdot(t, At) * torch.vdot(g, Bg) 
+
         psiterm = torch.vdot(t, psi @ t)
         phiterm = torch.vdot(g, phi @ g)
+
         regterm = (CFG.lamb / np.e) * (
-            CFG.cst1 * term1 * term2
-            - CFG.cst2 * (term3 * term4 + term5 * term6)
-            + CFG.cst3 * term7 * term8
+            CFG.cst1 * term1
+            - CFG.cst2 * (term2 + term3)
+            + CFG.cst3 * term4
         )
         loss = (psiterm - phiterm - regterm).real
         return loss

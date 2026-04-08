@@ -40,7 +40,7 @@ from qgan.generator import (
 )
 from qgan.ancilla import (
     get_final_gen_state_torch,
-    get_max_entangled_state_torch,
+    get_max_entangled_state_with_ancilla_if_needed,
 )
 from qgan.discriminator import Discriminator
 from qgan.cost_functions import compute_fidelity_and_cost
@@ -68,21 +68,21 @@ class Training:
         """
         # Prepare maximally entangled state (+ ancilla if needed)
         # Both are torch tensors, shape (d, 1), no gradient needed
-        _, initial_state_final = get_max_entangled_state_torch(CFG.system_size)
+        _, initial_state_final = get_max_entangled_state_with_ancilla_if_needed(CFG.system_size)
 
         # Target state: (I \otimes U_target) |\Phi^+ >
         # get_final_target_state returns numpy, convert to torch
-        target_np = get_final_target_state(initial_state_final.detach().numpy())
+        target_np = get_final_target_state(initial_state_final)
         self.final_target_state: torch.Tensor = torch.tensor(
             np.asarray(target_np), dtype=torch.complex128
         ).reshape(-1)
         # Flatten to 1D for the loss functions
         self.final_target_1d = self.final_target_state.reshape(-1)
 
-        # Generator: variational quantum circuit (PennyLane + PyTorch)
+        # Generator: variational quantum circuit
         self.gen: Generator = Generator()
 
-        # Discriminator: classical Hermitian operator (PyTorch nn.Module)
+        # Discriminator: classical Hermitian operator
         self.dis: Discriminator = Discriminator()
 
     def run(self):
