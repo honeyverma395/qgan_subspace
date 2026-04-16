@@ -9,3 +9,4 @@ generated_data
 .DS_Store
 .venv
 *cache*
+.vscode/
