@@ -36,13 +36,14 @@ import torch
 import torch.nn as nn
 from config import CFG
 from tools.data_managers import print_and_log
-
+from qgan.cost_functions import _calc_wasserstein
 
 # -- PAULI MATRICES ---------------------------------
-I = torch.eye(2, dtype=torch.complex128)
-X = torch.tensor([[0, 1], [1, 0]], dtype=torch.complex128)
-Y = torch.tensor([[0, -1j], [1j, 0]], dtype=torch.complex128)
-Z = torch.tensor([[1, 0], [0, -1]], dtype=torch.complex128)
+I = torch.eye(2, dtype=torch.complex64)
+X = torch.tensor([[0, 1], [1, 0]], dtype=torch.complex64)
+Y = torch.tensor([[0, -1j], [1j, 0]], dtype=torch.complex64)
+Z = torch.tensor([[1, 0], [0, -1]], dtype=torch.complex64)
+
 
 PAULIS = [I, X, Y, Z]
 
@@ -52,7 +53,7 @@ cst1, cst2, cst3, lamb = CFG.cst1, CFG.cst2, CFG.cst3, CFG.lamb
 
 
 class Discriminator(nn.Module):
-    """Discriminator for the Quantum Wasserstein GAN (PyTorch version).
+    """Discriminator for the Quantum Wasserstein GAN
 
     Parameters alpha, beta are nn.Parameters. The full forward pass
     (alpha,beta -> psi, phi -> A,B -> loss) is differentiable via autograd.
@@ -69,17 +70,19 @@ class Discriminator(nn.Module):
         super().__init__()
 
         # Total number of qubits the discriminator acts on
+        # Since we are applying the measurement to each qubit, the size changes
+        # if we are using Choi method (2* system size) or Haar Batching (system size)
         self.size: int = (
-            CFG.system_size * 2
+            CFG.system_size * (2 if CFG.use_choi else 1)
             + (1 if CFG.extra_ancilla and CFG.ancilla_mode == "pass" else 0)
-        )
+            )
 
         # alpha and beta as trainable parameters (real-valued)
         self.alpha = nn.Parameter(
-            -1 + 2 * torch.rand(self.size, 4, dtype=torch.float64)
+            -1 + 2 * torch.rand(self.size, 4, dtype=torch.float32)
         )
         self.beta = nn.Parameter(
-            -1 + 2 * torch.rand(self.size, 4, dtype=torch.float64)
+            -1 + 2 * torch.rand(self.size, 4, dtype=torch.float32)
         )
 
         # Optimizer: SGD with momentum, MAXIMISING
@@ -105,14 +108,14 @@ class Discriminator(nn.Module):
         Full operator: psi = H_0 \otimes H_1 \otimes ... \otimes H_{N-1}
 
         Returns:
-            (\psi, \phi) each of shape (2^N, 2^N), complex128, on the autograd graph.
+            (\psi, \phi) each of shape (2^N, 2^N), on the autograd graph.
         """
-        # Cast alpha, beta to complex for matrix multiplication
-        alpha_c = self.alpha.to(torch.complex128)
-        beta_c = self.beta.to(torch.complex128)
+        # Cast alpha, beta for matrix multiplication
+        alpha_c = self.alpha.to(torch.complex64)
+        beta_c = self.beta.to(torch.complex64)
 
-        psi = torch.tensor([[1.0]], dtype=torch.complex128)  # scalar 1 as 1×1 matrix
-        phi = torch.tensor([[1.0]], dtype=torch.complex128)
+        psi = torch.tensor([[1.0]], dtype=torch.complex64)  # scalar 1 as 1×1 matrix
+        phi = torch.tensor([[1.0]], dtype=torch.complex64)
 
         for i in range(self.size):
             # Per-qubit Hermitian
@@ -135,36 +138,17 @@ class Discriminator(nn.Module):
         B = torch.linalg.matrix_exp((1.0 / lamb) * psi)
         return A, B, psi, phi
 
-    # -- loss computation (replaces manual gradients) ---------------------------------
+    # -- loss computation ---------------------------------
     def compute_loss(self, final_target_state: torch.Tensor,
                      final_gen_state: torch.Tensor) -> torch.Tensor:
         """Compute the Wasserstein loss as a differentiable scalar."""
-        A, B, psi, phi = self.get_dis_matrices_rep()
+        dis_matrices = self.get_dis_matrices_rep()
 
         g = final_gen_state.reshape(-1)
         t = final_target_state.reshape(-1)
 
-        Ag = A @ g;  Bg = B @ g;  At = A @ t;  Bt = B @ t
-
-        # <g|A|g> · <t|B|t>
-        term1 = torch.vdot(g, Ag) * torch.vdot(t, Bt)
-        #cross terms: <t|A|g><g|B|t> + <g|A|t><t|B|g>
-        term2 = torch.vdot(g, At) * torch.vdot(t, Bg) 
-        term3 = torch.vdot(t, Ag) * torch.vdot(g, Bt) 
-        # <t|A|t> · <g|B|g>
-        term4 = torch.vdot(t, At) * torch.vdot(g, Bg) 
-
-        psiterm = torch.vdot(t, psi @ t)
-        phiterm = torch.vdot(g, phi @ g)
-
-        regterm = (CFG.lamb / np.e) * (
-            CFG.cst1 * term1
-            - CFG.cst2 * (term2 + term3)
-            + CFG.cst3 * term4
-        )
-        loss = (psiterm - phiterm - regterm).real
-        return -loss
-    
+        return -(_calc_wasserstein(g, t, dis_matrices))
+        
     # -- save / load ---------------------------------
     def save_model(self, file_path: str):
         """Save discriminator state to disk.

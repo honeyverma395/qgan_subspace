@@ -19,13 +19,9 @@ The original code built Hamiltonians manually with Kronecker products of
 2×2 Pauli matrices, PennyLane replaces all of that with qml.PauliX(i) @ qml.PauliZ(j)
 syntax, and qml.exp(H, coeff=-1j) for the matrix exponential.
 
-Unchanged:
-    get_target_unitary(target_type, size) 
-    get_final_target_state(input_state)    
-
-This module constructs the "answer" that the generator is trying to learn.
 Given a Hamiltonian H, we compute the time-evolution operator U = e^{-iH}
-and apply it to one half of a maximally entangled state (Choi representation).
+and apply it to one half of a maximally entangled state (Choi representation)
+or we apply it to random Haar states (uniform distribution - Haar).
 """
 
 import sys
@@ -35,7 +31,6 @@ import pennylane as qml
 
 from config import CFG
 
-
 # -- PAULI OPERATOR BUILDER ----------------------------------------
 # Used by _pauli_word to translate strings like "XZX" into operator chains
 # Same logic as in Generator.py
@@ -44,7 +39,6 @@ _PAULI_MAP = {
     "Y": qml.PauliY,
     "Z": qml.PauliZ,
 }
-
 
 def _pauli_word(pauli_string: str, qubits: list[int]) -> qml.operation.Operator:
     """Build a PennyLane tensor-product Pauli operator from a string.
@@ -298,38 +292,30 @@ def get_target_unitary(target_type: str, size: int) -> np.ndarray:
     return _hamiltonian_to_unitary(H, size)
 
 
-def get_final_target_state(final_input_state: np.ndarray) -> np.ndarray:
-    """Apply the target unitary to the Choi input state.
-
-    Computes <I  \otimes U_target [\otimes I_ancilla]) |\Phi^+ >
-
-    This uses the Choi-Jamiolkowski isomorphism. We apply I \otimes U to one
-    half of a maximally entangled state. The resulting "Choi state" uniquely
-    represents the channel and is what the discriminator compares against.
-
-    If ancilla is present in "pass" mode, we extend with I_{ancilla} because
-    the ancilla wire passes through to the discriminator unchanged.
-
-    Args:
-        final_input_state: The maximally entangled input state (column vector).
-
+def get_target_operator() -> np.ndarray:
+    """Build the full target operator for the current training mode.
+ 
+    Choi mode:  I_choi \otimes U_target [\otimes I_ancilla]
+ 
+    Batch mode: U_target [\otimes I_ancilla]
+ 
+    In both cases, if ancilla is present in "pass" mode, the operator
+    is extended with I_2 so it acts trivially on the ancilla qubit.
+ 
     Returns:
-        np.ndarray: Target state as column vector, ready for the discriminator.
+        np.ndarray: Target operator matrix.
     """
     # Get the target unitary U = e^{-iH*t}
     target_unitary = get_target_unitary(CFG.target_hamiltonian, CFG.system_size)
-
-    # I on Choi register \otimes U_target on system register
-    # This creates a (2^{2N} × 2^{2N}) matrix
-    identity_choi = np.eye(2 ** CFG.system_size)
-    target_op = np.kron(identity_choi, target_unitary)
-
-    # Extend with identity on ancilla wire if needed
-    # Only when ancilla is present AND in "pass" mode (ancilla reaches discriminator)
+ 
+    if CFG.use_choi:
+        identity_choi = np.eye(2 ** CFG.system_size)
+        target_op = np.kron(identity_choi, target_unitary)
+    else:
+        target_op = target_unitary
     # In "project" or "trace" modes, the target doesn't need the ancilla dimension
     # because the ancilla is removed before reaching the discriminator
     if CFG.extra_ancilla and CFG.ancilla_mode == "pass":
-        target_op = np.kron(target_op, np.eye(2))  # I_2 for one ancilla qubit
-
-    # Apply the target operator to the input state: |target> = (I \otimes U)|\Phi^+ >
-    return np.asmatrix(np.matmul(target_op, final_input_state))
+        target_op = np.kron(target_op, np.eye(2))
+ 
+    return target_op 

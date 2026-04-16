@@ -34,74 +34,88 @@ class Config:
         self.common_initial_plateaus: bool = True
 
         # If common_initial_plateaus:
-        self.N_initial_plateaus: int = 100
+        self.N_initial_plateaus: int = 10
         self.N_reps_each_init_plateau: int = 1
 
         # If not common_initial_plateaus:
-        self.N_reps_if_from_scratch: int = 100
+        self.N_reps_if_from_scratch: int = 1
+
+        # -- Training mode ----------------------------
+        # use_choi: True = Choi representation, False = Haar random batching
+        self.use_choi: bool = False
+        self.batch_size: int = 20  # Only for Haar random 
 
         # Configurations to compare (each dict overrides CFG attributes):
         self.reps_new_config: list[dict[str, Any]] = [
-            {
-                "extra_ancilla": True,
-                "ancilla_mode": "pass",
-                "ancilla_topology": "ansatz",
-                "ancilla_connect_to": None,
-                "do_ancilla_1q_gates": True,
-                "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": "all",
-            },
+            # {
+            #     "extra_ancilla": True,
+            #     "ancilla_mode": "pass",
+            #     "ancilla_topology": "ansatz",
+            #     "ancilla_connect_to": None,
+            #     "do_ancilla_1q_gates": True,
+            #     "start_ancilla_gates_randomly": True,
+            #     "ancilla_coupling_layers": "all",
+            # },
+            # {
+            #     "extra_ancilla": True,
+            #     "ancilla_mode": "pass",
+            #     "ancilla_topology": "bridge",
+            #     "ancilla_connect_to": 1,
+            #     "do_ancilla_1q_gates": True,
+            #     "start_ancilla_gates_randomly": True,
+            #     "ancilla_coupling_layers": "all",
+            # },
             {
                 "extra_ancilla": True,
                 "ancilla_mode": "pass",
                 "ancilla_topology": "bridge",
-                "ancilla_connect_to": 1,
+                "ancilla_connect_to": None,
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
                 "ancilla_coupling_layers": "all",
             },
             {
+                "extra_ancilla": True,
+                "ancilla_mode": "pass",
+                "ancilla_topology": "total",
+                "ancilla_connect_to": None,
+                "do_ancilla_1q_gates": True,
+                "start_ancilla_gates_randomly": True,
+                "ancilla_coupling_layers": "all",
+            },
+            {   
                 "extra_ancilla": True,
                 "ancilla_mode": "pass",
                 "ancilla_topology": "bridge",
                 "ancilla_connect_to": None,
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": "all",
+                "ancilla_coupling_layers": [1], # 2nd layer
             },
-            {
+            {   
                 "extra_ancilla": True,
                 "ancilla_mode": "pass",
-                "ancilla_topology": "all",
+                "ancilla_topology": "bridge",
                 "ancilla_connect_to": None,
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": "all",
+                "ancilla_coupling_layers": [2], # last layer
             },
-            # {   
-            #     "extra_ancilla": True,
-            #     "ancilla_mode": "pass",
-            #     "ancilla_topology": "bridge",
-            #     "ancilla_connect_to": None,
-            #     "do_ancilla_1q_gates": True,
-            #     "start_ancilla_gates_randomly": True,
-            #     "ancilla_coupling_layers": [1], # 2nd layer
-            # },
-            # {   
-            #     "extra_ancilla": True,
-            #     "ancilla_mode": "pass",
-            #     "ancilla_topology": "bridge",
-            #     "ancilla_connect_to": None,
-            #     "do_ancilla_1q_gates": True,
-            #     "start_ancilla_gates_randomly": True,
-            #     "ancilla_coupling_layers": [2], # last layer
-            # },
+            {   
+                "extra_ancilla": True,
+                "ancilla_mode": "pass",
+                "ancilla_topology": "bridge",
+                "ancilla_connect_to": None,
+                "do_ancilla_1q_gates": True,
+                "start_ancilla_gates_randomly": True,
+                "ancilla_coupling_layers": [0], # first layer
+            },
         ]
 
         # -- Loading and warm start ----------------------------
         # Load a previous run by timestamp. Supports \pm 1 qubit (ancilla add/remove).
 
-        self.load_timestamp: Optional[str] = None #-- ""
+        self.load_timestamp: Optional[str] = None #-- "" <------------
         self.type_of_warm_start: Literal["none", "all", "some"] = "none"
         self.warm_start_strength: Optional[float] = 0.1
 
@@ -131,7 +145,8 @@ class Config:
         #   trace   : trace out ancilla, sample pure state
 
         self.system_size: int = 3
-        self.extra_ancilla: bool = False # We begin with no extra qubits, but we add once we reach the Plateau
+        self.extra_ancilla: bool = True # We begin with no extra qubits, but we add once we reach the Plateau
+        self.gen_layers: int = 3
         # Ancilla mode define what happens to the ancilla before Discriminator (ancilla.py)
         self.ancilla_mode: Optional[Literal["pass", "project", "trace"]] = "pass" 
         self.ancilla_project_norm: Optional[Literal["re-norm", "pass"]] = "re-norm"
@@ -139,7 +154,7 @@ class Config:
         self.ancilla_connect_to: Optional[int] = None
         self.do_ancilla_1q_gates: bool = True
         self.start_ancilla_gates_randomly: bool = True
-        #If all layer have 2q coupling gates or not
+        # If all layer have 1q and 2q coupling gates or not
         self.ancilla_coupling_layers: Literal["all"] | list[int] = "all"
 
         # -- Generator ansatz ----------------------------
@@ -152,8 +167,6 @@ class Config:
         #
         # Custom: specify gate order in custom_ansatz_terms.
         #   Available: "X", "Y", "Z", "XX", "YY", "ZZ"
-
-        self.gen_layers: int = 3
 
         self.gen_ansatz: Literal["ZZ_YY_XX_Z", "ZZ_Z_X", "custom"] = "ZZ_Z_X"
         self.custom_ansatz_terms: Optional[list[str]] = ["ZZ", "XX", "Y", "X"]
@@ -210,6 +223,9 @@ class Config:
             f"{'═' * 50}\n"
             f"run_timestamp: {self.run_timestamp}\n"
             f"{sep}\n"
+            f"use_choi: {self.use_choi}\n"
+            f"batch_size: {self.batch_size}\n"
+            f"{sep}\n"
             f"load_timestamp: {self.load_timestamp}\n"
             f"type_of_warm_start: {self.type_of_warm_start}\n"
             f"warm_start_strength: {self.warm_start_strength}\n"
@@ -222,6 +238,7 @@ class Config:
             f"ancilla_connect_to: {self.ancilla_connect_to}\n"
             f"do_ancilla_1q_gates: {self.do_ancilla_1q_gates}\n"
             f"start_ancilla_gates_randomly: {self.start_ancilla_gates_randomly}\n"
+            f"ancilla_coupling_layers:{self.ancilla_coupling_layers}\n"
             f"{sep}\n"
             f"gen_layers: {self.gen_layers}\n"
             f"gen_ansatz: {self.gen_ansatz}\n"

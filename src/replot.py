@@ -22,14 +22,15 @@ from tools.plot_hub import find_if_common_initial_plateaus, generate_all_plots
 
 # ------- Parameters for the replotting script --------------
 # EXAMPLE TO EDIT PARAMETERS:
-time_stamp_to_replot = "2026-04-08__11-30-47" 
+time_stamp_to_replot = "batching" 
 max_fidelity = 0.99
 x_label = "Ancilla Topology"
 run_names = [
-    "Ansatz (all)",
-    "Bridge No1Q",
-    "Short Bridge",
-    "all",
+    "Bridge",
+    "All",
+    "Bridge (2nd layer)",
+    "Bridge (Last layer)",
+    "Bridge (First layer)",
 ]
 # STOP EDITING HERE
 

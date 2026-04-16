@@ -14,17 +14,11 @@
 """Generator module — PyTorch + PennyLane rewrite.
 
 Replaces all manual gradient computation (_grad_theta, _param_shift_grad_state,
-_apply_momentum_step) with PyTorch autograd. The QNode uses interface="torch"
-and diff_method="backprop", so the statevector is a torch tensor on the
-autograd graph. The loss (Wasserstein cost) is computed entirely in torch
-from the statevector + discriminator matrices, and loss.backward() gives
-exact gradients.
+_apply_momentum_step) with PyTorch autograd.
 
-Everything else is preserved:
-    - Choi representation: I \otimes G applied to |\Phi^+> (with optional ancilla |0>).
-    - Three ansatz modes: ZZ_Z_X, ZZ_YY_XX_Z, and custom.
-    - Full ancilla support: topologies and post-processing modes via config.
-    - Save/load with backward compatibility.
+For the Choi representation, we create a maximally entangled. 
+For Haar batching, we generate a complex vector with Gaussian distributed 
+coefficients and transform it into a quantum state using qml.StatePrep (both cases).
 """
 
 import os
@@ -37,14 +31,16 @@ import pennylane as qml
 
 from config import CFG
 from tools.data_managers import print_and_log
-from qgan.ancilla import get_final_gen_state_torch
+from qgan.ancilla import (
+    get_final_gen_state_torch,
+    get_max_entangled_state_with_ancilla_if_needed,
+    )
+from qgan.cost_functions import _calc_wasserstein
 
 # Wasserstein cost constants from config
 cst1, cst2, cst3, lamb = CFG.cst1, CFG.cst2, CFG.cst3, CFG.lamb
 
-
 # -- GATE TERM DEFINITIONS ------------------------------------------------
-# Same as original generator.py — maps term strings to (PennyLane gate, n_qubits)
 _1Q_GATES = {
     "X": qml.RX,
     "Y": qml.RY,
@@ -78,9 +74,9 @@ def _get_ansatz_terms() -> list[str]:
     )
 
 def _layer_coupling(layer_idx: int) -> bool:
-    """Check if a given layer should have ancilla 2q couplings.
+    """Check if a given layer should have ancilla 1q and 2q couplings.
     Returns:
-        True if ancilla 2q couplings should be applied in this layer.
+        True if ancilla 1q and 2q couplings should be applied in this layer.
     """
     if CFG.ancilla_coupling_layers == "all":
         return True
@@ -88,7 +84,7 @@ def _layer_coupling(layer_idx: int) -> bool:
 
 # -- DEVICE ----------------------------------------------------------------
 def _make_device(total_wires: int):
-    """Create a PennyLane device for the full Choi + generator register."""
+    """Create a PennyLane device for the full Choi and Haar register."""
     return qml.device("default.qubit", wires=total_wires)
 
 
@@ -128,7 +124,7 @@ class Ansatz:
                     idx += 1
 
             # -- Ancilla 1q gates --
-            if ancilla_wire is not None and CFG.do_ancilla_1q_gates:
+            if ancilla_wire is not None and CFG.do_ancilla_1q_gates and _layer_coupling(layer_idx):
                 for term in terms_1q:
                     _1Q_GATES[term](params[idx], wires=ancilla_wire);  idx += 1
 
@@ -137,7 +133,6 @@ class Ansatz:
                 idx = Ansatz._apply_ancilla_couplings(
                     params, idx, terms, system_wires, ancilla_wire
                 )
-
 
 
     @staticmethod
@@ -196,7 +191,7 @@ def count_params(n_system: int, has_ancilla: bool) -> int:
         n += n_1q_terms * n_system
         n += n_2q_terms * (n_system - 1)
 
-        if has_ancilla and CFG.do_ancilla_1q_gates:
+        if has_ancilla and CFG.do_ancilla_1q_gates and _layer_coupling(layer_idx):
             n += n_1q_terms
 
         if has_ancilla and _layer_coupling(layer_idx):
@@ -227,17 +222,27 @@ def _wire_layout():
     Layout:  [ choi_register | gen_system | (ancilla) ]
     """
     s = CFG.system_size
-    choi_wires = list(range(s))
-    gen_system_wires = list(range(s, 2 * s))
-
-    if CFG.extra_ancilla:
-        ancilla_wire = 2 * s
-        gen_wires = gen_system_wires + [ancilla_wire]
-        total_wires = 2 * s + 1
+    if CFG.use_choi:
+        choi_wires = list(range(s))
+        gen_system_wires = list(range(s, 2 * s))
+        if CFG.extra_ancilla:
+            ancilla_wire = 2 * s
+            gen_wires = gen_system_wires + [ancilla_wire]
+            total_wires = 2 * s + 1
+        else:
+            ancilla_wire = None
+            gen_wires = gen_system_wires
+            total_wires = 2 * s
     else:
-        ancilla_wire = None
-        gen_wires = gen_system_wires
-        total_wires = 2 * s
+        choi_wires = None # No choi wire for batching
+        if CFG.extra_ancilla:
+            ancilla_wire = s
+            gen_wires = list(range(s)) + [ancilla_wire]
+            total_wires = s + 1
+        else:
+            ancilla_wire = None
+            gen_wires = list(range(s))
+            total_wires = s
 
     return choi_wires, gen_wires, ancilla_wire, total_wires
 
@@ -246,10 +251,8 @@ def _wire_layout():
 def _build_qnode():
     """Build the QNode for the generator circuit.
 
-    Uses interface="torch" and diff_method="backprop" so the output
-    statevector is a torch tensor on the autograd graph.
-
-    1) Prepare maximally-entangled state (Choi) via H + CNOT.
+    1) Prepare a quantum state from a Gaussian distributed complex vector
+    or from a Max. Entangled state (qml.StatePrep)
     2) Apply ansatz on generator register.
     3) Return full statevector (as a torch tensor).
     """
@@ -257,12 +260,8 @@ def _build_qnode():
     dev = _make_device(total_wires)
 
     @qml.qnode(dev, interface="torch", diff_method="backprop")
-    def circuit(params):
-        gen_system_wires = [w for w in gen_wires if w != ancilla_wire]
-        for c_wire, g_wire in zip(choi_wires, gen_system_wires):
-            qml.Hadamard(wires=c_wire)
-            qml.CNOT(wires=[c_wire, g_wire])
-
+    def circuit(params,input_state = None):
+        qml.StatePrep(input_state, wires=range(total_wires))
         Ansatz.apply(params, gen_wires, ancilla_wire)
         return qml.state()
 
@@ -270,11 +269,7 @@ def _build_qnode():
 
 # -- GENERATOR CLASS -------------------------------------------
 class Generator:
-    """Generator for the Quantum WGAN (PyTorch + PennyLane version).
-
-    The circuit parameters are a torch tensor (requires_grad=True).
-    The QNode returns a torch statevector, and the full loss is computed
-    in torch so autograd handles all gradients.
+    """Generator for the Quantum WGAN
 
     Removed:
         - _grad_theta()             -> replaced by loss.backward()
@@ -286,7 +281,6 @@ class Generator:
         gen.update_gen(dis, final_target_state_torch)
         state = gen.get_total_gen_state()
     """
-
     def __init__(self):
         # -- save/load compatibility metadata --
         self.size: int = CFG.system_size + (1 if CFG.extra_ancilla else 0)
@@ -297,14 +291,24 @@ class Generator:
         self.layers: int = CFG.gen_layers
         self.target_size: int = CFG.system_size
         self.target_hamiltonian: str = CFG.target_hamiltonian
+        self.use_choi: bool = CFG.use_choi
 
-        # -- parameters (torch tensor, requires_grad) --
+        # -- parameters -------
         n_params = count_params(CFG.system_size, CFG.extra_ancilla)
         self.n_params: int = n_params
         self.params: torch.Tensor = self._init_params(n_params)
 
-        # -- circuit (QNode with torch interface) --
+        # -- circuit ---------
         self.circuit = _build_qnode()
+        # In choi representation we always use the same initial state,
+        # so we created once and save it 
+        # In batching we have different states, thus no need to save the state
+        if CFG.use_choi:
+            me_state, _ = get_max_entangled_state_with_ancilla_if_needed(CFG.system_size)
+            self.choi_input = torch.tensor(
+                np.asarray(me_state).flatten(), dtype=torch.complex64
+            )
+            self.total_gen_state = self.get_total_gen_state()
 
         # -- optimizer: SGD with momentum, MINIMISING --
         self.optimizer = torch.optim.SGD(
@@ -312,10 +316,7 @@ class Generator:
             lr=CFG.l_rate,
             momentum=CFG.momentum_coeff,
         )
-
-        # -- state --
-        self.total_gen_state: torch.Tensor = self.get_total_gen_state()
-
+            
     # -- parameter initialisation ------------------------------------------
     def _init_params(self, n_params: int) -> torch.Tensor:
         """Random uniform in [0, 2\pi), as a torch tensor with requires_grad=True.
@@ -323,7 +324,7 @@ class Generator:
         Respects start_ancilla_gates_randomly: if False, ancilla gate params
         are initialised to 0.
         """
-        params = torch.empty(n_params, dtype=torch.float64).uniform_(0, 2 * np.pi)
+        params = torch.empty(n_params, dtype=torch.float32).uniform_(0, 2 * np.pi)
 
         if CFG.extra_ancilla and not CFG.start_ancilla_gates_randomly:
             ancilla_indices = self._get_ancilla_param_indices()
@@ -348,7 +349,7 @@ class Generator:
             idx += n_2q_terms * (n_sys - 1)
 
             # Ancilla 1q gates
-            if CFG.do_ancilla_1q_gates:
+            if CFG.do_ancilla_1q_gates and _layer_coupling(layer_idx):
                 for _ in range(n_1q_terms):
                     indices.append(idx);  idx += 1
 
@@ -361,12 +362,13 @@ class Generator:
         return indices
 
     # -- forward pass ------------------------------------------------------
-    def get_total_gen_state(self) -> torch.Tensor:
+    def get_total_gen_state(self, input_state = None) -> torch.Tensor:
         """Run the circuit and return the full statevector as a 1D torch tensor.
-
-        The returned tensor is on the autograd graph .
         """
-        return self.circuit(self.params)
+        if CFG.use_choi:
+            return self.circuit(self.params, self.choi_input)
+        else:
+            return self.circuit(self.params, input_state)
 
     def get_final_gen_state(self, total_gen_state: torch.Tensor) -> torch.Tensor:
         """Apply ancilla post-processing and return the final state for the discriminator.
@@ -375,46 +377,49 @@ class Generator:
         """
         return get_final_gen_state_torch(total_gen_state)
 
-    # -- loss computation --------------------------------------------------
-    def compute_loss(self, dis, final_target_state):
-        """Compute the Wasserstein loss as a differentiable scalar."""
-        total_gen_state = self.get_total_gen_state()
-        self.total_gen_state = total_gen_state
-        final_gen_state = self.get_final_gen_state(total_gen_state)
-
-        # Detach dis matrices so gradients only flow through gen params
+    def _get_detached_matrices(self, dis):
+        """Detach discriminator matrices safely.
+           Even though the generator try to minimize the loss function, here
+           we only change the parameters of the Circuit
+        """
         with torch.no_grad():
             A, B, psi, phi = dis.get_dis_matrices_rep()
-        A = A.detach(); B = B.detach(); psi = psi.detach(); phi = phi.detach()
+        return A.detach(), B.detach(), psi.detach(), phi.detach()
+        
+    # -- loss computation --------------------------------------------------
+    def compute_loss(self, dis, final_target_state):
+        """Compute the Wasserstein loss as a differentiable scalar (Choi)"""
+        total_gen_state = self.get_total_gen_state()
+        final_gen_state = self.get_final_gen_state(total_gen_state)
 
+        dis_matrices = self._get_detached_matrices(dis)
+        
         g = final_gen_state.reshape(-1)
         t = final_target_state.reshape(-1)
 
-        Ag = A @ g;  Bg = B @ g;  At = A @ t;  Bt = B @ t
-        # <g|A|g> · <t|B|t>
-        term1 = torch.vdot(g, Ag) * torch.vdot(t, Bt)
-        #cross terms: <t|A|g><g|B|t> + <g|A|t><t|B|g>
-        term2 = torch.vdot(g, At) * torch.vdot(t, Bg)
-        term3 = torch.vdot(t, Ag) * torch.vdot(g, Bt)
-        # <t|A|t> · <g|B|g>
-        term4 = torch.vdot(t, At) * torch.vdot(g, Bg) 
+        return _calc_wasserstein(g, t, dis_matrices)
+    
+    # -- Loss for batching ----------
+    def compute_loss_batch(self, dis, batch_inputs, batch_targets):
+        """Compute average Wasserstein loss over a batch of input states (Haar)"""
+        dis_matrices = self._get_detached_matrices(dis)
+        total_loss = torch.tensor(0.0, dtype=torch.float32)
 
-        psiterm = torch.vdot(t, psi @ t)
-        phiterm = torch.vdot(g, phi @ g)
+        for input_state, target_state in zip(batch_inputs, batch_targets):
+            gen_state = self.get_total_gen_state(input_state)
+            g = get_final_gen_state_torch(gen_state).reshape(-1)
+            t = target_state.reshape(-1)
 
-        regterm = (CFG.lamb / np.e) * (
-            CFG.cst1 * term1
-            - CFG.cst2 * (term2 + term3)
-            + CFG.cst3 * term4
-        )
-        loss = (psiterm - phiterm - regterm).real
-        return loss
+            total_loss = total_loss + _calc_wasserstein(g, t, dis_matrices)
+
+        return total_loss / len(batch_inputs)
 
     # -- training step --------------------------------
-    def update_gen(self, dis, final_target_state: torch.Tensor):
+    def update_gen(self, dis, final_target_state=None,
+               batch_inputs=None, batch_targets=None):
         """One generator optimisation step (minimisation).
 
-        Drop-in replacement for the old update_gen(). Computes the loss,
+        Replacement for the old update_gen(). Computes the loss,
         backpropagates through the QNode + ancilla processing + brakets,
         and steps the optimizer.
 
@@ -422,15 +427,20 @@ class Generator:
             dis: Discriminator
             final_target_state: Target state as torch tensor, shape (d, 1).
                 If you have a numpy array, convert with:
-                    torch.tensor(np.asarray(state), dtype=torch.complex128)
+                    torch.tensor(np.asarray(state), dtype=torch.complex64)
         """
         self.optimizer.zero_grad()
-        loss = self.compute_loss(dis, final_target_state)
+        if CFG.use_choi:
+            loss = self.compute_loss(dis, final_target_state)
+        else:
+            loss = self.compute_loss_batch(dis, batch_inputs, batch_targets)
+
         loss.backward()
         self.optimizer.step()
 
-        with torch.no_grad():
-            self.total_gen_state = self.get_total_gen_state()
+        if CFG.use_choi:
+            with torch.no_grad():
+                self.total_gen_state = self.get_total_gen_state()
 
     # -- SAVE / LOAD -------------------------------------------------------
     def save_model(self, file_path: str):
@@ -504,7 +514,7 @@ class Generator:
                 print_and_log("ERROR: param count mismatch.\n", CFG.log_path)
                 return False
             with torch.no_grad():
-                self.params.copy_(torch.from_numpy(saved_params).to(torch.float64))
+                self.params.copy_(torch.from_numpy(saved_params).to(torch.float32))
             if "optimizer_state" in saved:
                 self.optimizer.load_state_dict(saved["optimizer_state"])
             self._refresh_state()
@@ -562,5 +572,6 @@ class Generator:
  
     def _refresh_state(self):
         """Recompute cached statevector from current parameters."""
-        with torch.no_grad():
-            self.total_gen_state = self.get_total_gen_state()
+        if CFG.use_choi:
+            with torch.no_grad():
+                self.total_gen_state = self.get_total_gen_state()

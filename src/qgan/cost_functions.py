@@ -14,18 +14,42 @@
 """Cost and Fidelity Functions — PyTorch version.
 
 Reduced from the original cost_functions.py:
-    - braket()                    -> REMOVED (replaced by torch.vdot in dis/gen compute_loss)
+    - braket()                    -> REMOVED (replaced by torch.vdot _calc_wasserstein)
     - compute_fidelity()          -> kept, torch version
     - compute_fidelity_and_cost() -> kept, calls dis.compute_loss
-
-Since the discriminator and generator now compute their own losses
-internally via torch.trace and autograd, this module only needs to
-provide evaluation metrics for logging during training.
 """
 
 import torch
 import numpy as np
 from config import CFG
+ 
+def _calc_wasserstein(g, t, dis_matrices):
+        """Computation of the Wasserstein loss.
+            Instead of repeating the code, we create this function to reuse
+            in Choi and Haar method. 
+        """
+        A, B, psi, phi = dis_matrices
+
+        Ag = A @ g;  Bg = B @ g;  At = A @ t;  Bt = B @ t
+
+        # <g|A|g> · <t|B|t>
+        term1 = torch.vdot(g, Ag) * torch.vdot(t, Bt)
+        #cross terms: <t|A|g><g|B|t> + <g|A|t><t|B|g>
+        term2 = torch.vdot(t, Ag) * torch.vdot(g, Bt)
+        term3 = torch.vdot(g, At) * torch.vdot(t, Bg)
+        # <t|A|t> · <g|B|g>
+        term4 = torch.vdot(t, At) * torch.vdot(g, Bg)
+
+        psiterm = torch.vdot(t, psi @ t)
+        phiterm = torch.vdot(g, phi @ g)
+
+        regterm = (CFG.lamb / np.e) * (
+            CFG.cst1 * term1
+            - CFG.cst2 * (term2 + term3)
+            + CFG.cst3 * term4
+        )
+        return (psiterm - phiterm - regterm).real
+
 
 def compute_fidelity(final_target_state: torch.Tensor,
                      final_gen_state: torch.Tensor) -> float:
@@ -58,8 +82,6 @@ def compute_fidelity_and_cost(dis, final_target_state: torch.Tensor,
         (fidelity, cost): both as floats.
     """
     fidelity = compute_fidelity(final_target_state, final_gen_state)
-    with torch.no_grad():
-        neg_cost = dis.compute_loss(final_target_state, final_gen_state)
-
-    cost = float(-neg_cost)
-    return fidelity, cost
+    dis_matrices = dis.get_dis_matrices_rep()
+    cost = _calc_wasserstein(final_gen_state, final_target_state, dis_matrices)
+    return fidelity, cost.item()

@@ -20,7 +20,6 @@
 """
 
 import numpy as np
-import pennylane as qml
 import torch 
 import torch.nn as nn
 from config import CFG
@@ -29,12 +28,12 @@ from config import CFG
 # -- MAXIMALLY ENTANGLED STATE PREPARATION -------------------
 def get_max_entangled_state_with_ancilla_if_needed(size: int) -> np.ndarray:
     """Get the maximally entangled state for the system size (With Ancilla if needed).
-
     Args:
         size (int): the size of the system.
 
     Returns:
-        tuple[np.ndarray]: the maximally entangled states, plus ancilla if needed for generation and target.
+        tuple[np.ndarray]: the maximally entangled states, plus ancilla 
+        if needed for generation and target.
     """
     # Generate the maximally entangled state for the system size
     state = np.zeros(2 ** (2 * size), dtype=complex)
@@ -47,11 +46,58 @@ def get_max_entangled_state_with_ancilla_if_needed(size: int) -> np.ndarray:
     initial_state_with_ancilla = np.kron(state, np.array([1, 0], dtype=complex))
 
     # Different conditions for gen and target:
-    initial_state_for_gen = initial_state_with_ancilla if CFG.extra_ancilla else state
+    initial_state_for_gen    = initial_state_with_ancilla if CFG.extra_ancilla else state
     initial_state_for_target = initial_state_with_ancilla if CFG.extra_ancilla and CFG.ancilla_mode == "pass" else state
 
     return np.asmatrix(initial_state_for_gen).T, np.asmatrix(initial_state_for_target).T
 
+# -- HAAR RANDOM STATE PREPARATION -------------------
+def haar_random_batch(dim: int, batch_size: int) -> list[torch.Tensor]:
+    """Generate batch of Haar-random pure states, with ancilla if needed.
+    In this case, we reuse the vector for the target (we multiply the target Unitary to the vector)
+    and for the generator (we transform vector to quantum state using qml.StatePrep)
+    (See Lecture 3- Henry Yuen)
+    
+    Args:
+        dim: Dimension of the system Hilbert space (2^system_size).
+        batch_size: Number of states to generate.
+    
+    Returns:
+        List of torch tensors, each of shape (dim,) or (2*dim,) with ancilla.
+    """
+    ancilla_zero = torch.tensor([1.0, 0.0], dtype=torch.complex64)
+    batch_raw = []
+    batch_inputs = []
+    for _ in range(batch_size):
+        real = torch.randn(dim, dtype=torch.float32)
+        imag = torch.randn(dim, dtype=torch.float32)
+        v = torch.complex(real, imag)
+        v = v / v.norm()
+        batch_raw.append(v)
+        batch_inputs.append(torch.kron(v, ancilla_zero) if CFG.extra_ancilla else v)
+    return batch_raw, batch_inputs
+
+def prepare_batch_targets(batch_raw: list[torch.Tensor],
+    batch_inputs: list[torch.Tensor],target_op: torch.Tensor,) -> list[torch.Tensor]:
+    """ Give us the target state
+    If ancilla_mode == "pass":
+        target_i = (U_target \otimes I_2) |\psi_i> \otimes |0>
+    Otherwise:
+        target_i = U_target |\psi_i>
+ 
+    Args:
+        batch_raw               : States without ancilla (dim 2^n).
+        batch_inputs            : States with ancilla
+        target_op (torch tensor): Pre-computed target operator.
+ 
+    Returns:
+        List of target state vectors, each 1D torch tensor.
+    """
+    if CFG.extra_ancilla and CFG.ancilla_mode == "pass":
+        return [(target_op @ psi).reshape(-1) for psi in batch_inputs]
+    else:
+        return [(target_op @ psi).reshape(-1) for psi in batch_raw]
+    
 # -- ANCILLA POST-PROCESSING -----------------------------
 def _project_ancilla_zero(state: torch.Tensor,
                                  renormalize: bool = True
@@ -76,10 +122,10 @@ def _project_ancilla_zero(state: torch.Tensor,
     prob = torch.sum(projected.conj() * projected).real
 
     if prob.item() < 1e-15:
-        n_system_qubits = CFG.system_size * 2  # choi + system register
+        n_system_qubits = CFG.system_size * (2 if CFG.use_choi else 1)  # choi + system register
         return (
-            torch.zeros(2**n_system_qubits, 1, dtype=torch.complex128),
-            torch.tensor(0.0, dtype=torch.float64),
+            torch.zeros(2**n_system_qubits, 1, dtype=torch.complex64),
+            torch.tensor(0.0, dtype=torch.float32),
         )
 
     if renormalize:
@@ -124,7 +170,7 @@ def _trace_out_ancilla(state: torch.Tensor) -> torch.Tensor:
     eigvals /= np.sum(eigvals)
 
     idx = np.random.choice(len(eigvals), p=eigvals)
-    sampled = torch.tensor(eigvecs[:, idx], dtype=torch.complex128)
+    sampled = torch.tensor(eigvecs[:, idx], dtype=torch.complex64)
 
     return sampled.reshape(-1, 1)
 
