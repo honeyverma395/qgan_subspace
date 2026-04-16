@@ -87,6 +87,24 @@ def _make_device(total_wires: int):
     """Create a PennyLane device for the full Choi and Haar register."""
     return qml.device("default.qubit", wires=total_wires)
 
+def debug_layer_coupling():
+    """Print per-layer coupling decisions and ancilla param counts."""
+    terms = _get_ansatz_terms()
+    n_2q_terms = sum(1 for t in terms if t in _2Q_GATES)
+    n_1q_terms = sum(1 for t in terms if t in _1Q_GATES)
+    n_sys = CFG.system_size
+    print("="*60)
+    print(f"ancilla_coupling_layers = {CFG.ancilla_coupling_layers}")
+    print(f"topology = {CFG.ancilla_topology}, layers = {CFG.gen_layers}")
+
+    for layer_idx in range(CFG.gen_layers):
+        couples = _layer_coupling(layer_idx)
+        anc_1q = n_1q_terms if (couples and CFG.do_ancilla_1q_gates) else 0
+        anc_2q = _count_ancilla_coupling_params(n_2q_terms, n_sys) if couples else 0
+        print(f"  Layer {layer_idx}: couples={couples}  anc_1q={anc_1q}  anc_2q={anc_2q}")
+
+    print(f"Total params: {count_params(n_sys, CFG.extra_ancilla)}")
+    print("="*60)
 
 # -- UNIFIED ANSATZ --------------------------------------------------------
 class Ansatz:

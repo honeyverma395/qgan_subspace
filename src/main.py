@@ -15,10 +15,13 @@
 
 from config import CFG
 from tools.training_init import run_multiple_trainings, run_single_training
+from qgan.generator import debug_layer_coupling  
 
 
 # -- SINGLE RUN mode ---------------------------
 def main():
+    #Check if the num of parameters ir correct
+    # debug_layer_coupling()
     if CFG.run_multiple_experiments:
         run_multiple_trainings()
     else:

@@ -19,7 +19,6 @@ from typing import Any, Literal, Optional
 
 import numpy as np
 
-
 class Config:
     """Central configuration for all QGAN experiment parameters
 
@@ -30,8 +29,8 @@ class Config:
         # -- Run mode ----------------------------
         # Single run or multiple experiments with optional shared initial plateaus.
 
-        self.run_multiple_experiments: bool = True
-        self.common_initial_plateaus: bool = True
+        self.run_multiple_experiments: bool = False
+        self.common_initial_plateaus: bool = False
 
         # If common_initial_plateaus:
         self.N_initial_plateaus: int = 10
@@ -42,7 +41,7 @@ class Config:
 
         # -- Training mode ----------------------------
         # use_choi: True = Choi representation, False = Haar random batching
-        self.use_choi: bool = False
+        self.use_choi: bool = True
         self.batch_size: int = 20  # Only for Haar random 
 
         # Configurations to compare (each dict overrides CFG attributes):
@@ -155,7 +154,7 @@ class Config:
         self.do_ancilla_1q_gates: bool = True
         self.start_ancilla_gates_randomly: bool = True
         # If all layer have 1q and 2q coupling gates or not
-        self.ancilla_coupling_layers: Literal["all"] | list[int] = "all"
+        self.ancilla_coupling_layers: Literal["all"] | list[int] = [0,2]
 
         # -- Generator ansatz ----------------------------
         #
