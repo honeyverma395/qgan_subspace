@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Configuration for the QGAN experiment
-No big changed from original """
+No big changed from original"""
 
 from datetime import datetime
 from typing import Any, Literal, Optional
 
 import numpy as np
+
 
 class Config:
     """Central configuration for all QGAN experiment parameters
@@ -42,7 +43,7 @@ class Config:
         # -- Training mode ----------------------------
         # use_choi: True = Choi representation, False = Haar random batching
         self.use_choi: bool = True
-        self.batch_size: int = 20  # Only for Haar random 
+        self.batch_size: int = 20  # Only for Haar random
 
         # Configurations to compare (each dict overrides CFG attributes):
         self.reps_new_config: list[dict[str, Any]] = [
@@ -82,49 +83,47 @@ class Config:
                 "start_ancilla_gates_randomly": True,
                 "ancilla_coupling_layers": "all",
             },
-            {   
+            {
                 "extra_ancilla": True,
                 "ancilla_mode": "pass",
                 "ancilla_topology": "bridge",
                 "ancilla_connect_to": None,
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": [1], # 2nd layer
+                "ancilla_coupling_layers": [1],  # 2nd layer
             },
-            {   
+            {
                 "extra_ancilla": True,
                 "ancilla_mode": "pass",
                 "ancilla_topology": "bridge",
                 "ancilla_connect_to": None,
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": [2], # last layer
+                "ancilla_coupling_layers": [2],  # last layer
             },
-            {   
+            {
                 "extra_ancilla": True,
                 "ancilla_mode": "pass",
                 "ancilla_topology": "bridge",
                 "ancilla_connect_to": None,
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": [0], # first layer
+                "ancilla_coupling_layers": [0],  # first layer
             },
         ]
 
         # -- Loading and warm start ----------------------------
         # Load a previous run by timestamp. Supports \pm 1 qubit (ancilla add/remove).
-
-        self.load_timestamp: Optional[str] = None #-- "" <------------
+        self.load_timestamp: Optional[str] = None  # -- "" <------------
         self.type_of_warm_start: Literal["none", "all", "some"] = "none"
         self.warm_start_strength: Optional[float] = 0.1
 
         # -- Training ------------------------------------------
-
         self.epochs: int = 10
         self.iterations_epoch: int = 300
         self.save_fid_and_loss_every_x_iter: int = 1
         self.log_every_x_iter: int = 10  # Must be a multiple of save_fid_and_loss_every_x_iter
-        self.max_fidelity: float = 0.99  # Stop button 
+        self.max_fidelity: float = 0.99  # Stop button
         # In GANs, we can choose that the Discriminador learn faster than the Generator, or vice versa.
         self.steps_dis: int = 1
         self.steps_gen: int = 1
@@ -142,19 +141,18 @@ class Config:
         #   pass    : ancilla wire reaches the discriminator
         #   project : project ancilla to |0>, remove it
         #   trace   : trace out ancilla, sample pure state
-
         self.system_size: int = 3
-        self.extra_ancilla: bool = True # We begin with no extra qubits, but we add once we reach the Plateau
+        self.extra_ancilla: bool = True  # We begin with no extra qubits, but we add once we reach the Plateau
         self.gen_layers: int = 3
         # Ancilla mode define what happens to the ancilla before Discriminator (ancilla.py)
-        self.ancilla_mode: Optional[Literal["pass", "project", "trace"]] = "pass" 
+        self.ancilla_mode: Optional[Literal["pass", "project", "trace"]] = "pass"
         self.ancilla_project_norm: Optional[Literal["re-norm", "pass"]] = "re-norm"
         self.ancilla_topology: Optional[Literal["disconnected", "ansatz", "bridge", "total", "fake"]] = "bridge"
         self.ancilla_connect_to: Optional[int] = None
         self.do_ancilla_1q_gates: bool = True
         self.start_ancilla_gates_randomly: bool = True
         # If all layer have 1q and 2q coupling gates or not
-        self.ancilla_coupling_layers: Literal["all"] | list[int] = [0,2]
+        self.ancilla_coupling_layers: Literal["all"] | list[int] = [0, 2]
 
         # -- Generator ansatz ----------------------------
         #
@@ -166,7 +164,6 @@ class Config:
         #
         # Custom: specify gate order in custom_ansatz_terms.
         #   Available: "X", "Y", "Z", "XX", "YY", "ZZ"
-
         self.gen_ansatz: Literal["ZZ_YY_XX_Z", "ZZ_Z_X", "custom"] = "ZZ_Z_X"
         self.custom_ansatz_terms: Optional[list[str]] = ["ZZ", "XX", "Y", "X"]
 
@@ -197,13 +194,10 @@ class Config:
         self.set_results_paths()
         self._validate()
 
-    
     def _validate(self) -> None:
         """Sanity check for every iter that we plot or save"""
         if self.log_every_x_iter % self.save_fid_and_loss_every_x_iter != 0:
-            raise ValueError(
-                "log_every_x_iter must be a multiple of save_fid_and_loss_every_x_iter."
-            )
+            raise ValueError("log_every_x_iter must be a multiple of save_fid_and_loss_every_x_iter.")
 
     def set_results_paths(self) -> None:
         """Update all output paths based on current base_data_path"""
