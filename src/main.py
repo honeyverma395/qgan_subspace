@@ -14,7 +14,6 @@
 """Main module for running the quantum GAN training"""
 
 from config import CFG
-from qgan.generator import debug_layer_coupling
 from tools.training_init import run_multiple_trainings, run_single_training
 
 
