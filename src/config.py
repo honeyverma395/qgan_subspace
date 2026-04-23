@@ -231,7 +231,7 @@ class Config:
             f"ancilla_connect_to: {self.ancilla_connect_to}\n"
             f"do_ancilla_1q_gates: {self.do_ancilla_1q_gates}\n"
             f"start_ancilla_gates_randomly: {self.start_ancilla_gates_randomly}\n"
-            f"ancilla_coupling_layers:{self.ancilla_coupling_layers}\n"
+            f"ancilla_coupling_layers: {self.ancilla_coupling_layers}\n"
             f"{sep}\n"
             f"gen_layers: {self.gen_layers}\n"
             f"gen_ansatz: {self.gen_ansatz}\n"
