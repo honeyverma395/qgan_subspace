@@ -19,10 +19,9 @@ import os
 from tools.data_managers import get_last_experiment_idx
 from tools.plot_hub import find_if_common_initial_plateaus, generate_all_plots
 
-
 # ------- Parameters for the replotting script --------------
 # EXAMPLE TO EDIT PARAMETERS:
-time_stamp_to_replot = "primer" 
+time_stamp_to_replot = "primer"
 max_fidelity = 0.99
 x_label = "Ancilla Topology"
 run_names = [

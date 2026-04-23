@@ -16,8 +16,8 @@
 Replaces all manual gradient computation (_grad_theta, _param_shift_grad_state,
 _apply_momentum_step) with PyTorch autograd.
 
-For the Choi representation, we create a maximally entangled. 
-For Haar batching, we generate a complex vector with Gaussian distributed 
+For the Choi representation, we create a maximally entangled.
+For Haar batching, we generate a complex vector with Gaussian distributed
 coefficients and transform it into a quantum state using qml.StatePrep (both cases).
 """
 
@@ -25,17 +25,17 @@ import os
 from typing import Optional
 
 import numpy as np
+import pennylane as qml
 import torch
 import torch.nn as nn
-import pennylane as qml
 
 from config import CFG
-from tools.data_managers import print_and_log
 from qgan.ancilla import (
     get_final_gen_state_torch,
     get_max_entangled_state_with_ancilla_if_needed,
-    )
+)
 from qgan.cost_functions import _calc_wasserstein
+from tools.data_managers import print_and_log
 
 # Wasserstein cost constants from config
 cst1, cst2, cst3, lamb = CFG.cst1, CFG.cst2, CFG.cst3, CFG.lamb
@@ -55,7 +55,7 @@ _2Q_GATES = {
 
 # Predefined ansatz
 _PREDEFINED_ANSATZ = {
-    "ZZ_Z_X":     ["X", "Z", "ZZ"],
+    "ZZ_Z_X": ["X", "Z", "ZZ"],
     "ZZ_YY_XX_Z": ["Z", "XX", "YY", "ZZ"],
 }
 
@@ -69,9 +69,9 @@ def _get_ansatz_terms() -> list[str]:
     if CFG.gen_ansatz in _PREDEFINED_ANSATZ:
         return _PREDEFINED_ANSATZ[CFG.gen_ansatz]
     raise ValueError(
-        f"Unknown ansatz: {CFG.gen_ansatz}. "
-        f"Expected one of: {list(_PREDEFINED_ANSATZ.keys())} or 'custom'."
+        f"Unknown ansatz: {CFG.gen_ansatz}. Expected one of: {list(_PREDEFINED_ANSATZ.keys())} or 'custom'."
     )
+
 
 def _layer_coupling(layer_idx: int) -> bool:
     """Check if a given layer should have ancilla 1q and 2q couplings.
@@ -82,10 +82,12 @@ def _layer_coupling(layer_idx: int) -> bool:
         return True
     return layer_idx in CFG.ancilla_coupling_layers
 
+
 # -- DEVICE ----------------------------------------------------------------
 def _make_device(total_wires: int):
     """Create a PennyLane device for the full Choi and Haar register."""
     return qml.device("default.qubit", wires=total_wires)
+
 
 def debug_layer_coupling():
     """Print per-layer coupling decisions and ancilla param counts."""
@@ -93,7 +95,7 @@ def debug_layer_coupling():
     n_2q_terms = sum(1 for t in terms if t in _2Q_GATES)
     n_1q_terms = sum(1 for t in terms if t in _1Q_GATES)
     n_sys = CFG.system_size
-    print("="*60)
+    print("=" * 60)
     print(f"ancilla_coupling_layers = {CFG.ancilla_coupling_layers}")
     print(f"topology = {CFG.ancilla_topology}, layers = {CFG.gen_layers}")
 
@@ -104,7 +106,8 @@ def debug_layer_coupling():
         print(f"  Layer {layer_idx}: couples={couples}  anc_1q={anc_1q}  anc_2q={anc_2q}")
 
     print(f"Total params: {count_params(n_sys, CFG.extra_ancilla)}")
-    print("="*60)
+    print("=" * 60)
+
 
 # -- UNIFIED ANSATZ --------------------------------------------------------
 class Ansatz:
@@ -130,10 +133,11 @@ class Ansatz:
 
         for layer_idx in range(CFG.gen_layers):
             # -- System gates from term list --
-            # We apply the gates in this order RX, RZ, RX, RZ... 
+            # We apply the gates in this order RX, RZ, RX, RZ...
             for w in system_wires:
                 for term in terms_1q:
-                    _1Q_GATES[term](params[idx], wires=w);  idx += 1
+                    _1Q_GATES[term](params[idx], wires=w)
+                    idx += 1
 
             for term in terms_2q:
                 gate_fn = _2Q_GATES[term]
@@ -144,19 +148,15 @@ class Ansatz:
             # -- Ancilla 1q gates --
             if ancilla_wire is not None and CFG.do_ancilla_1q_gates and _layer_coupling(layer_idx):
                 for term in terms_1q:
-                    _1Q_GATES[term](params[idx], wires=ancilla_wire);  idx += 1
+                    _1Q_GATES[term](params[idx], wires=ancilla_wire)
+                    idx += 1
 
             # -- Ancilla 2q couplings --
             if ancilla_wire is not None and _layer_coupling(layer_idx):
-                idx = Ansatz._apply_ancilla_couplings(
-                    params, idx, terms, system_wires, ancilla_wire
-                )
-
+                idx = Ansatz._apply_ancilla_couplings(params, idx, terms, system_wires, ancilla_wire)
 
     @staticmethod
-    def _apply_ancilla_couplings(params, idx: int, terms: list[str],
-                                  system_wires: list[int],
-                                  ancilla_wire: int) -> int:
+    def _apply_ancilla_couplings(params, idx: int, terms: list[str], system_wires: list[int], ancilla_wire: int) -> int:
         """Apply ancilla 2q couplings according to topology.
 
         Uses the same 2q gate types from the term list.
@@ -178,7 +178,8 @@ class Ansatz:
         def _apply_coupling(wire_a, wire_b):
             nonlocal idx
             for gate_fn in gates_2q:
-                gate_fn(params[idx], wires=[wire_a, wire_b]);  idx += 1
+                gate_fn(params[idx], wires=[wire_a, wire_b])
+                idx += 1
 
         if topo == "total":
             for w in system_wires:
@@ -252,7 +253,7 @@ def _wire_layout():
             gen_wires = gen_system_wires
             total_wires = 2 * s
     else:
-        choi_wires = None # No choi wire for batching
+        choi_wires = None  # No choi wire for batching
         if CFG.extra_ancilla:
             ancilla_wire = s
             gen_wires = list(range(s)) + [ancilla_wire]
@@ -278,12 +279,13 @@ def _build_qnode():
     dev = _make_device(total_wires)
 
     @qml.qnode(dev, interface="torch", diff_method="backprop")
-    def circuit(params,input_state = None):
+    def circuit(params, input_state=None):
         qml.StatePrep(input_state, wires=range(total_wires))
         Ansatz.apply(params, gen_wires, ancilla_wire)
         return qml.state()
 
     return circuit
+
 
 # -- GENERATOR CLASS -------------------------------------------
 class Generator:
@@ -299,6 +301,7 @@ class Generator:
         gen.update_gen(dis, final_target_state_torch)
         state = gen.get_total_gen_state()
     """
+
     def __init__(self):
         # -- save/load compatibility metadata --
         self.size: int = CFG.system_size + (1 if CFG.extra_ancilla else 0)
@@ -319,13 +322,11 @@ class Generator:
         # -- circuit ---------
         self.circuit = _build_qnode()
         # In choi representation we always use the same initial state,
-        # so we created once and save it 
+        # so we created once and save it
         # In batching we have different states, thus no need to save the state
         if CFG.use_choi:
             me_state, _ = get_max_entangled_state_with_ancilla_if_needed(CFG.system_size)
-            self.choi_input = torch.tensor(
-                np.asarray(me_state).flatten(), dtype=torch.complex64
-            )
+            self.choi_input = torch.tensor(np.asarray(me_state).flatten(), dtype=torch.complex64)
             self.total_gen_state = self.get_total_gen_state()
 
         # -- optimizer: SGD with momentum, MINIMISING --
@@ -334,7 +335,7 @@ class Generator:
             lr=CFG.l_rate,
             momentum=CFG.momentum_coeff,
         )
-            
+
     # -- parameter initialisation ------------------------------------------
     def _init_params(self, n_params: int) -> torch.Tensor:
         """Random uniform in [0, 2\pi), as a torch tensor with requires_grad=True.
@@ -369,20 +370,21 @@ class Generator:
             # Ancilla 1q gates
             if CFG.do_ancilla_1q_gates and _layer_coupling(layer_idx):
                 for _ in range(n_1q_terms):
-                    indices.append(idx);  idx += 1
+                    indices.append(idx)
+                    idx += 1
 
             # Ancilla 2q couplings
             if _layer_coupling(layer_idx):
                 n_anc_2q = _count_ancilla_coupling_params(n_2q_terms, n_sys)
                 for _ in range(n_anc_2q):
-                    indices.append(idx);  idx += 1
+                    indices.append(idx)
+                    idx += 1
 
         return indices
 
     # -- forward pass ------------------------------------------------------
-    def get_total_gen_state(self, input_state = None) -> torch.Tensor:
-        """Run the circuit and return the full statevector as a 1D torch tensor.
-        """
+    def get_total_gen_state(self, input_state=None) -> torch.Tensor:
+        """Run the circuit and return the full statevector as a 1D torch tensor."""
         if CFG.use_choi:
             return self.circuit(self.params, self.choi_input)
         else:
@@ -397,13 +399,13 @@ class Generator:
 
     def _get_detached_matrices(self, dis):
         """Detach discriminator matrices safely.
-           Even though the generator try to minimize the loss function, here
-           we only change the parameters of the Circuit
+        Even though the generator try to minimize the loss function, here
+        we only change the parameters of the Circuit
         """
         with torch.no_grad():
             A, B, psi, phi = dis.get_dis_matrices_rep()
         return A.detach(), B.detach(), psi.detach(), phi.detach()
-        
+
     # -- loss computation --------------------------------------------------
     def compute_loss(self, dis, final_target_state):
         """Compute the Wasserstein loss as a differentiable scalar (Choi)"""
@@ -411,12 +413,12 @@ class Generator:
         final_gen_state = self.get_final_gen_state(total_gen_state)
 
         dis_matrices = self._get_detached_matrices(dis)
-        
+
         g = final_gen_state.reshape(-1)
         t = final_target_state.reshape(-1)
 
         return _calc_wasserstein(g, t, dis_matrices)
-    
+
     # -- Loss for batching ----------
     def compute_loss_batch(self, dis, batch_inputs, batch_targets):
         """Compute average Wasserstein loss over a batch of input states (Haar)"""
@@ -433,8 +435,7 @@ class Generator:
         return total_loss / len(batch_inputs)
 
     # -- training step --------------------------------
-    def update_gen(self, dis, final_target_state=None,
-               batch_inputs=None, batch_targets=None):
+    def update_gen(self, dis, final_target_state=None, batch_inputs=None, batch_targets=None):
         """One generator optimisation step (minimisation).
 
         Replacement for the old update_gen(). Computes the loss,
@@ -478,54 +479,56 @@ class Generator:
             "optimizer_state": self.optimizer.state_dict(),
         }
         torch.save(save_dict, file_path)
- 
+
     def load_model_params(self, file_path: str) -> bool:
-        """Load generator parameters from a saved model
-        """
+        """Load generator parameters from a saved model"""
         if not os.path.exists(file_path):
             print_and_log("ERROR: Generator model file not found\n", CFG.log_path)
             return False
- 
+
         try:
             saved = torch.load(file_path, weights_only=False)
         except Exception as e:
             print_and_log(
-                f"ERROR: Could not load generator model: {e}\n"
-                "Old pickle/numpy formats are no longer supported.\n",
+                f"ERROR: Could not load generator model: {e}\nOld pickle/numpy formats are no longer supported.\n",
                 CFG.log_path,
             )
             return False
- 
+
         if not isinstance(saved, dict) or "params" not in saved:
             print_and_log(
                 "ERROR: Unrecognised format. Only torch dict format is supported.\n",
                 CFG.log_path,
             )
             return False
- 
+
         return self._load_from_torch_dict(saved)
- 
+
     def _load_from_torch_dict(self, saved: dict) -> bool:
         """Load from torch save_model format."""
         cant_load = False
         if saved.get("target_size") != self.target_size:
-            print_and_log("ERROR: target size mismatch.\n", CFG.log_path);  cant_load = True
+            print_and_log("ERROR: target size mismatch.\n", CFG.log_path)
+            cant_load = True
         if saved.get("target_hamiltonian") != self.target_hamiltonian:
-            print_and_log("ERROR: target hamiltonian mismatch.\n", CFG.log_path);  cant_load = True
+            print_and_log("ERROR: target hamiltonian mismatch.\n", CFG.log_path)
+            cant_load = True
         if saved.get("ansatz") != self.ansatz:
-            print_and_log("ERROR: ansatz mismatch.\n", CFG.log_path);  cant_load = True
+            print_and_log("ERROR: ansatz mismatch.\n", CFG.log_path)
+            cant_load = True
         if saved.get("layers") != self.layers:
-            print_and_log("ERROR: layer count mismatch.\n", CFG.log_path);  cant_load = True
-        if (saved.get("ancilla") and self.ancilla
-                and saved.get("ancilla_topology") != self.ancilla_topology):
-            print_and_log("ERROR: ancilla topology mismatch.\n", CFG.log_path);  cant_load = True
+            print_and_log("ERROR: layer count mismatch.\n", CFG.log_path)
+            cant_load = True
+        if saved.get("ancilla") and self.ancilla and saved.get("ancilla_topology") != self.ancilla_topology:
+            print_and_log("ERROR: ancilla topology mismatch.\n", CFG.log_path)
+            cant_load = True
         if cant_load:
             return False
- 
+
         saved_params = saved["params"]
         saved_size = saved.get("size", 0)
         saved_ancilla = saved.get("ancilla", False)
- 
+
         # Exact match
         if saved_size == self.size and saved_ancilla == self.ancilla:
             if len(saved_params) != self.n_params:
@@ -538,31 +541,29 @@ class Generator:
             self._refresh_state()
             print_and_log("Generator parameters loaded (torch dict format).\n", CFG.log_path)
             return True
- 
+
         # \pm 1 qubit (ancilla difference)
         if saved_ancilla != self.ancilla and abs(saved_size - self.size) == 1:
-            self._partial_load_params(saved_params, saved_ancilla,
-                                      saved.get("ancilla_topology"),
-                                      saved.get("ancilla_coupling_layers", "all"))
+            self._partial_load_params(
+                saved_params, saved_ancilla, saved.get("ancilla_topology"), saved.get("ancilla_coupling_layers", "all")
+            )
             self._refresh_state()
-            print_and_log("Generator parameters partially loaded (ancilla diff, torch dict).\n",
-                          CFG.log_path)
+            print_and_log("Generator parameters partially loaded (ancilla diff, torch dict).\n", CFG.log_path)
             return True
- 
+
         print_and_log("ERROR: incompatible generator.\n", CFG.log_path)
         return False
- 
-    def _partial_load_params(self, saved_params: np.ndarray,
-                              saved_ancilla: bool,
-                              saved_topology: Optional[str],
-                              saved_coupling_layers=None) -> None:
+
+    def _partial_load_params(
+        self, saved_params: np.ndarray, saved_ancilla: bool, saved_topology: Optional[str], saved_coupling_layers=None
+    ) -> None:
         """Load system-only params when ancilla is added/removed.
- 
+
         Identifies ancilla param indices in both saved and current configs,
         extracts system-only params, and copies them.
         """
         my_ancilla_idx = set(self._get_ancilla_param_indices()) if self.ancilla else set()
- 
+
         saved_ancilla_idx = set()
         if saved_ancilla:
             # Temporarily swap config to compute saved model's ancilla indices
@@ -572,22 +573,22 @@ class Generator:
             orig_coupling_layers = CFG.ancilla_coupling_layers
             CFG.extra_ancilla = saved_ancilla
             CFG.ancilla_topology = saved_topology or CFG.ancilla_topology
-            CFG.do_ancilla_1q_gates = getattr(CFG, 'do_ancilla_1q_gates', True)
+            CFG.do_ancilla_1q_gates = getattr(CFG, "do_ancilla_1q_gates", True)
             CFG.ancilla_coupling_layers = saved_coupling_layers if saved_coupling_layers is not None else "all"
             saved_ancilla_idx = set(self._get_ancilla_param_indices())
             CFG.extra_ancilla = orig_extra
             CFG.ancilla_topology = orig_topo
             CFG.do_ancilla_1q_gates = orig_1q
             CFG.ancilla_coupling_layers = orig_coupling_layers
- 
+
         saved_system = [p for i, p in enumerate(saved_params) if i not in saved_ancilla_idx]
         my_system_idx = [i for i in range(self.n_params) if i not in my_ancilla_idx]
- 
+
         n_copy = min(len(saved_system), len(my_system_idx))
         with torch.no_grad():
             for j in range(n_copy):
                 self.params[my_system_idx[j]] = float(saved_system[j])
- 
+
     def _refresh_state(self):
         """Recompute cached statevector from current parameters."""
         if CFG.use_choi:

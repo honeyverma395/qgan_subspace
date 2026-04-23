@@ -34,9 +34,10 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
+
 from config import CFG
-from tools.data_managers import print_and_log
 from qgan.cost_functions import _calc_wasserstein
+from tools.data_managers import print_and_log
 
 # -- PAULI MATRICES ---------------------------------
 I = torch.eye(2, dtype=torch.complex64)
@@ -72,18 +73,13 @@ class Discriminator(nn.Module):
         # Total number of qubits the discriminator acts on
         # Since we are applying the measurement to each qubit, the size changes
         # if we are using Choi method (2* system size) or Haar Batching (system size)
-        self.size: int = (
-            CFG.system_size * (2 if CFG.use_choi else 1)
-            + (1 if CFG.extra_ancilla and CFG.ancilla_mode == "pass" else 0)
-            )
+        self.size: int = CFG.system_size * (2 if CFG.use_choi else 1) + (
+            1 if CFG.extra_ancilla and CFG.ancilla_mode == "pass" else 0
+        )
 
         # alpha and beta as trainable parameters (real-valued)
-        self.alpha = nn.Parameter(
-            -1 + 2 * torch.rand(self.size, 4, dtype=torch.float32)
-        )
-        self.beta = nn.Parameter(
-            -1 + 2 * torch.rand(self.size, 4, dtype=torch.float32)
-        )
+        self.alpha = nn.Parameter(-1 + 2 * torch.rand(self.size, 4, dtype=torch.float32))
+        self.beta = nn.Parameter(-1 + 2 * torch.rand(self.size, 4, dtype=torch.float32))
 
         # Optimizer: SGD with momentum, MAXIMISING
         self.optimizer = torch.optim.SGD(
@@ -126,8 +122,7 @@ class Discriminator(nn.Module):
 
         return psi, phi
 
-    def get_dis_matrices_rep(self) -> tuple[torch.Tensor, torch.Tensor,
-                                            torch.Tensor, torch.Tensor]:
+    def get_dis_matrices_rep(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute A = exp(−phi / lambda) and B = exp(+\psi / lambda).
 
         Returns:
@@ -139,8 +134,7 @@ class Discriminator(nn.Module):
         return A, B, psi, phi
 
     # -- loss computation ---------------------------------
-    def compute_loss(self, final_target_state: torch.Tensor,
-                     final_gen_state: torch.Tensor) -> torch.Tensor:
+    def compute_loss(self, final_target_state: torch.Tensor, final_gen_state: torch.Tensor) -> torch.Tensor:
         """Compute the Wasserstein loss as a differentiable scalar."""
         dis_matrices = self.get_dis_matrices_rep()
 
@@ -148,7 +142,7 @@ class Discriminator(nn.Module):
         t = final_target_state.reshape(-1)
 
         return -(_calc_wasserstein(g, t, dis_matrices))
-        
+
     # -- save / load ---------------------------------
     def save_model(self, file_path: str):
         """Save discriminator state to disk.
@@ -169,8 +163,7 @@ class Discriminator(nn.Module):
         torch.save(save_dict, file_path)
 
     def load_model_params(self, file_path: str) -> bool:
-        """Load discriminator parameters from a saved model (torch format only).
-        """
+        """Load discriminator parameters from a saved model (torch format only)."""
         if not os.path.exists(file_path):
             print_and_log("Discriminator model file not found\n", CFG.log_path)
             return False
@@ -179,8 +172,7 @@ class Discriminator(nn.Module):
             saved = torch.load(file_path, weights_only=False)
         except Exception as e:
             print_and_log(
-                f"ERROR: Could not load discriminator model: {e}\n"
-                "Old pickle/numpy formats are no longer supported.\n",
+                f"ERROR: Could not load discriminator model: {e}\nOld pickle/numpy formats are no longer supported.\n",
                 CFG.log_path,
             )
             return False
@@ -193,7 +185,7 @@ class Discriminator(nn.Module):
             return False
 
         return self._load_from_torch_format(saved)
-    
+
     def _load_from_torch_format(self, saved: dict) -> bool:
         """Load from new torch save format."""
         # Compatibility checks
@@ -227,4 +219,3 @@ class Discriminator(nn.Module):
 
         print_and_log("ERROR: incompatible discriminator (size mismatch).\n", CFG.log_path)
         return False
-

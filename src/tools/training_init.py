@@ -21,12 +21,12 @@ import traceback
 import numpy as np
 
 from config import CFG
-from qgan.training import Training ##########
+from qgan.training import Training  ##########
 from tools.data_managers import get_last_experiment_idx, print_and_log, print_and_log_with_headers
 from tools.plot_hub import generate_all_plots
 
 # ruff: noqa: E226
-# indicates that the linter (a program that automatically checks code quality) 
+# indicates that the linter (a program that automatically checks code quality)
 # should not check this line. Any warnings that code may have generated will be ignored.
 
 
@@ -107,7 +107,9 @@ def run_multiple_trainings():
             common_initial_plateaus=CFG.common_initial_plateaus,
         )
         print_and_log("\nAll multiple training runs completed.\n", CFG.log_path)
-        print_and_log("\nAnalysis plots (recurrence vs max fidelity, averages, and success rates) generated.\n", CFG.log_path)
+        print_and_log(
+            "\nAnalysis plots (recurrence vs max fidelity, averages, and success rates) generated.\n", CFG.log_path
+        )
 
     # -- Handle exceptions during the training run
     except Exception as e:
@@ -223,7 +225,9 @@ def _run_initial_plateaus(N_initial_plateaus: int, base_path: str):
         temp_dir = f"{base_path}/initial_plateau_attempt_{attempt}"
         CFG.base_data_path = temp_dir
         CFG.set_results_paths()
-        print_and_log_with_headers(f"\nInitial Plateau Attempt {attempt} (kept {kept + 1}/{N_initial_plateaus})", CFG.log_path)
+        print_and_log_with_headers(
+            f"\nInitial Plateau Attempt {attempt} (kept {kept + 1}/{N_initial_plateaus})", CFG.log_path
+        )
         Training().run()
         print_and_log(f"\nInitial Plateau Attempt {attempt} completed. Checking fidelity...\n", CFG.log_path)
         # Check final fidelity
@@ -254,7 +258,9 @@ def _run_initial_plateaus(N_initial_plateaus: int, base_path: str):
     print_and_log(f"\nFinished collecting {N_initial_plateaus} initial plateaus below threshold.\n", CFG.log_path)
 
 
-def _run_repeated_experiments(N_initial_plateaus: int, N_reps_each_init_plateau: int, base_path: str, changed_or_control: str):
+def _run_repeated_experiments(
+    N_initial_plateaus: int, N_reps_each_init_plateau: int, base_path: str, changed_or_control: str
+):
     # changed_or_control can now be 'control' or 'changed_runX'
     is_changed = changed_or_control.startswith("changed_run")
     run_idx = None
@@ -271,7 +277,9 @@ def _run_repeated_experiments(N_initial_plateaus: int, N_reps_each_init_plateau:
         elif is_changed:
             out_dir = f"{base_path}/initial_plateau_{i + 1}/repeated_changed_run{run_idx}/{rep + 1}"
         else:
-            raise ValueError(f"Invalid value for changed_or_control: {changed_or_control} (!= 'control', 'changed_runX').")
+            raise ValueError(
+                f"Invalid value for changed_or_control: {changed_or_control} (!= 'control', 'changed_runX')."
+            )
         CFG.load_timestamp = f"{CFG.run_timestamp}/initial_plateau_{i + 1}"
         CFG.base_data_path = out_dir
         CFG.set_results_paths()

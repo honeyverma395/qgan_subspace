@@ -16,7 +16,7 @@
 The training loop logic is unchanged from the original.
 Changes:
     - We defined the update_gen in generator.py since the parameters of A and B,
-    are detached from the parameters of the circuit. 
+    are detached from the parameters of the circuit.
     - We have now use_choi (bool) to specify if we are going to train using Choi or using Haar
     random states.
 """
@@ -27,36 +27,37 @@ import numpy as np
 import torch
 
 from config import CFG
-from qgan.generator import (
-    Generator,
-)
 from qgan.ancilla import (
     get_final_gen_state_torch,
     get_max_entangled_state_with_ancilla_if_needed,
     haar_random_batch,
-    prepare_batch_targets
+    prepare_batch_targets,
 )
-from qgan.discriminator import Discriminator
 from qgan.cost_functions import compute_fidelity_and_cost
+from qgan.discriminator import Discriminator
+from qgan.generator import (
+    Generator,
+)
+from qgan.target import get_target_operator
 from tools.data_managers import (
     print_and_log,
     save_fidelity_loss,
     save_gen_final_params,
 )
-from qgan.target import get_target_operator
 from tools.loading_helpers import load_models_if_specified
 from tools.plot_hub import plt_fidelity_vs_iter
 
 np.random.seed()
 
+
 class Training:
     def __init__(self):
         """Builds the training configuration.
- 
+
         Choi mode:
             1. Maximally entangled state |\Phi^+> (+ ancilla if needed).
             2. Target state: (I \otimes U_target [\otimes I_ancilla]) |\Phi^+>.
- 
+
         Haar batch mode:
             1. Pre-compute target unitary U_target.
             2. Batch of Haar-random states generated each iteration.
@@ -64,14 +65,12 @@ class Training:
         """
         # -- Target operator --------
         self.target_op = torch.tensor(get_target_operator(), dtype=torch.complex64)
- 
+
         if CFG.use_choi:
             # -- Choi mode: apply target_op to |\Phi^+> --
-            _, initial_state_final = get_max_entangled_state_with_ancilla_if_needed(
-                CFG.system_size)
-            initial_state = torch.tensor(
-                np.asarray(initial_state_final), dtype=torch.complex64).reshape(-1)
-            
+            _, initial_state_final = get_max_entangled_state_with_ancilla_if_needed(CFG.system_size)
+            initial_state = torch.tensor(np.asarray(initial_state_final), dtype=torch.complex64).reshape(-1)
+
             self.final_target_state = (self.target_op @ initial_state).reshape(-1)
 
         # Generator: variational quantum circuit
@@ -91,11 +90,11 @@ class Training:
 
         Choi mode:
             Each iteration uses the fixed |\Phi^+> state.
- 
+
         Haar batch mode:
             Each iteration generates a fresh batch of B Haar-random states.
             Loss and gradients are averaged over the batch (mini-batch SGD).
- 
+
         Stops when max_fidelity is reached or max epochs is reached.
         Saves models, fidelity history, and generator parameters at the end.
         """
@@ -165,15 +164,13 @@ class Training:
         self.dis.save_model(CFG.model_dis_path)
         save_gen_final_params(self.gen, CFG.gen_final_params_path)
         # Time calculation
-        endtime = datetime.now() 
+        endtime = datetime.now()
         print_and_log(f"\nRun took: {endtime - starttime} time.", CFG.log_path)
 
     # -- Choi mode (max entangled state) ------------------
-    def _train_step_choi(self, epoch_iter: int,
-                         fidelities: list, losses: list):
-        """One training iteration in Choi mode.
-        """
-        # -- Detached state for discriminator 
+    def _train_step_choi(self, epoch_iter: int, fidelities: list, losses: list):
+        """One training iteration in Choi mode."""
+        # -- Detached state for discriminator
         with torch.no_grad():
             total_gen_detached = self.gen.get_total_gen_state()
             final_gen_detached = get_final_gen_state_torch(total_gen_detached).reshape(-1)
@@ -185,42 +182,40 @@ class Training:
             dis_loss.backward()
             self.dis.optimizer.step()
 
-        # -- Generator steps 
+        # -- Generator steps
         for _ in range(CFG.steps_gen):
             self.gen.update_gen(self.dis, self.final_target_state)
-        
+
         # -- Fidelity evaluation --
         if epoch_iter % CFG.save_fid_and_loss_every_x_iter == 0:
             with torch.no_grad():
-                final_gen_eval = get_final_gen_state_torch(
-                    self.gen.total_gen_state).reshape(-1)
-            fid, loss = compute_fidelity_and_cost(
-                self.dis, self.final_target_state, final_gen_eval)
+                final_gen_eval = get_final_gen_state_torch(self.gen.total_gen_state).reshape(-1)
+            fid, loss = compute_fidelity_and_cost(self.dis, self.final_target_state, final_gen_eval)
             fidelities.append(fid)
             losses.append(loss)
 
     # -- Batching (Haar random states) ------------------
-    def _train_step_batch(self, epoch_iter: int,
-                          fidelities: list, losses: list):
+    def _train_step_batch(self, epoch_iter: int, fidelities: list, losses: list):
         """One training iteration in Haar batch mode.
- 
+
         1. Generate Haar-random states  (with ancilla |0⟩ if needed).
         2. Compute target states: U_target|\psi_i> for each.
-        3. Discriminator (maximise) and Generator (minimise) 
+        3. Discriminator (maximise) and Generator (minimise)
         4. Evaluate average fidelity over batch periodically.
         """
         B = CFG.batch_size
-        dim = 2 ** CFG.system_size
- 
+        dim = 2**CFG.system_size
+
         # -- Generate Haar batch for each iter (includes ancilla |0> if needed) --
         batch_raw, batch_inputs = haar_random_batch(dim, B)
         batch_targets = prepare_batch_targets(batch_raw, batch_inputs, self.target_op)
 
         # -- Discriminator: detached generator states, averaged loss --
         with torch.no_grad():
-            det_gen_states = [get_final_gen_state_torch(self.gen.get_total_gen_state(inp)
-                ).reshape(-1) for inp in batch_inputs]
- 
+            det_gen_states = [
+                get_final_gen_state_torch(self.gen.get_total_gen_state(inp)).reshape(-1) for inp in batch_inputs
+            ]
+
         for _ in range(CFG.steps_dis):
             self.dis.optimizer.zero_grad()
             dis_loss = torch.tensor(0.0, dtype=torch.float32)
@@ -229,22 +224,20 @@ class Training:
             dis_loss = dis_loss / B
             dis_loss.backward()
             self.dis.optimizer.step()
- 
+
         # -- Generator: averaged loss with gradients --
         for _ in range(CFG.steps_gen):
             self.gen.update_gen(
                 self.dis,
                 batch_inputs=batch_inputs,
-                batch_targets=batch_targets, 
+                batch_targets=batch_targets,
             )
- 
+
         # -- Fidelity evaluation: average over batch --
         if epoch_iter % CFG.save_fid_and_loss_every_x_iter == 0:
             with torch.no_grad():
                 eval_gen = [
-                    get_final_gen_state_torch(
-                        self.gen.get_total_gen_state(inp)
-                    ).reshape(-1) for inp in batch_inputs
+                    get_final_gen_state_torch(self.gen.get_total_gen_state(inp)).reshape(-1) for inp in batch_inputs
                 ]
             fid_sum, loss_sum = 0.0, 0.0
             for t, g in zip(batch_targets, eval_gen):
