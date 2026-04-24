@@ -21,7 +21,6 @@ get_final_gen_state_for_discriminator(state)           -> final_state
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 from config import CFG
 
@@ -194,6 +193,7 @@ def get_final_gen_state_torch(total_output_state: torch.Tensor) -> torch.Tensor:
     Returns:
         Column vector, shape (d, 1), as torch tensor.
     """
+    total_output_state = total_output_state.to(torch.complex64)  # Ensure correct dtype
     if not CFG.extra_ancilla:
         return total_output_state.reshape(-1, 1)
 
