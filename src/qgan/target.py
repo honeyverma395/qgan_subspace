@@ -40,6 +40,7 @@ _PAULI_MAP = {
     "Z": qml.PauliZ,
 }
 
+
 def _pauli_word(pauli_string: str, qubits: list[int]) -> qml.operation.Operator:
     """Build a PennyLane tensor-product Pauli operator from a string.
 
@@ -61,8 +62,7 @@ def _pauli_word(pauli_string: str, qubits: list[int]) -> qml.operation.Operator:
     """
     if len(pauli_string) != len(qubits):
         raise ValueError(
-            f"Pauli string '{pauli_string}' has {len(pauli_string)} chars "
-            f"but {len(qubits)} qubits were given."
+            f"Pauli string '{pauli_string}' has {len(pauli_string)} chars but {len(qubits)} qubits were given."
         )
 
     # Build each single-qubit Pauli and chain them with @
@@ -74,8 +74,7 @@ def _pauli_word(pauli_string: str, qubits: list[int]) -> qml.operation.Operator:
 
 
 # -- HAMILTONIAN BUILDER ------------------------
-def _build_hamiltonian(size: int, terms: list[str],
-                       strengths: list[float]) -> qml.Hamiltonian:
+def _build_hamiltonian(size: int, terms: list[str], strengths: list[float]) -> qml.Hamiltonian:
     """Build a PennyLane Hamiltonian from term strings and strengths.
 
     This is the PennyLane replacement for the original construct_target().
@@ -108,19 +107,19 @@ def _build_hamiltonian(size: int, terms: list[str],
             ops.append(qml.Identity(0))
 
         elif len(term) == 1 and term in _PAULI_MAP:
-            # 1-body term on every qubit: e.g. "X" -> \sum_i X_i 
+            # 1-body term on every qubit: e.g. "X" -> \sum_i X_i
             for i in range(size):
                 coeffs.append(strength)
                 ops.append(_PAULI_MAP[term](i))
 
         elif len(term) == 2:
-            # 2-body nearest-neighbour: e.g. "ZZ" -> \sum_i Z_i·Z_{i+1} 
+            # 2-body nearest-neighbour: e.g. "ZZ" -> \sum_i Z_i·Z_{i+1}
             for i in range(size - 1):
                 coeffs.append(strength)
                 ops.append(_pauli_word(term, [i, i + 1]))
 
         elif len(term) == 3:
-            # 3-body nearest-neighbour: e.g. "XZX" -> \sum_i X_i·Z_{i+1}·X_{i+2} 
+            # 3-body nearest-neighbour: e.g. "XZX" -> \sum_i X_i·Z_{i+1}·X_{i+2}
             for i in range(size - 2):
                 coeffs.append(strength)
                 ops.append(_pauli_word(term, [i, i + 1, i + 2]))
@@ -142,7 +141,7 @@ def _hamiltonian_to_unitary(H: qml.Hamiltonian, size: int) -> np.ndarray:
 
     This replaces scipy.linalg.expm(-1j * H_matrix) from the original code.
     PennyLane's qml.exp computes the operator exponential symbolically,
-    and qml.matrix converts it to a numpy array, so it can be used for 
+    and qml.matrix converts it to a numpy array, so it can be used for
     discriminator or cost function.
 
     The wire_order=range(size) ensures the matrix rows/columns follow
@@ -158,13 +157,12 @@ def _hamiltonian_to_unitary(H: qml.Hamiltonian, size: int) -> np.ndarray:
     Returns:
         np.ndarray of shape (2^size, 2^size).
     """
-    return qml.matrix(qml.exp(H, coeff=-1j* CFG.time_to_evolve), wire_order=range(size))
+    return qml.matrix(qml.exp(H, coeff=-1j * CFG.time_to_evolve), wire_order=range(size))
 
 
 # -- PREDEFINED HAMILTONIANS ------------------------
 def _cluster_hamiltonian(size: int) -> qml.Hamiltonian:
-    """Cluster Hamiltonian:  H = \sum_i X_iZ_{i+1}X_{i+2} + \sum_i Z_i
-    """
+    """Cluster Hamiltonian:  H = \sum_i X_iZ_{i+1}X_{i+2} + \sum_i Z_i"""
     coeffs, ops = [], []
     # XZX terms: 3-body stabilizer-like interactions
     for i in range(size - 2):
@@ -178,8 +176,7 @@ def _cluster_hamiltonian(size: int) -> qml.Hamiltonian:
 
 
 def _ising_hamiltonian(size: int) -> qml.Hamiltonian:
-    """Transverse-field Ising:  H = -\sum_i Z_iZ_{i+1} - \sum_i X_i
-    """
+    """Transverse-field Ising:  H = -\sum_i Z_iZ_{i+1} - \sum_i X_i"""
     coeffs, ops = [], []
     for i in range(size - 1):
         # ZZ coupling between neighbours
@@ -280,12 +277,10 @@ def get_target_unitary(target_type: str, size: int) -> np.ndarray:
         H = _ising_hamiltonian(size)
     elif target_type == "custom_h":
         # Custom Hamiltonian: terms and strengths from config
-        H = _build_hamiltonian(size, CFG.custom_hamiltonian_terms,
-                               CFG.custom_hamiltonian_strengths)
+        H = _build_hamiltonian(size, CFG.custom_hamiltonian_terms, CFG.custom_hamiltonian_strengths)
     else:
         raise ValueError(
-            f"Unknown target type: {target_type}. "
-            f"Expected 'cluster_h', 'rotated_surface_h', 'ising_h', or 'custom_h'."
+            f"Unknown target type: {target_type}. Expected 'cluster_h', 'rotated_surface_h', 'ising_h', or 'custom_h'."
         )
 
     # Convert Hamiltonian -> unitary: U = e^{-iH}
@@ -294,22 +289,22 @@ def get_target_unitary(target_type: str, size: int) -> np.ndarray:
 
 def get_target_operator() -> np.ndarray:
     """Build the full target operator for the current training mode.
- 
+
     Choi mode:  I_choi \otimes U_target [\otimes I_ancilla]
- 
+
     Batch mode: U_target [\otimes I_ancilla]
- 
+
     In both cases, if ancilla is present in "pass" mode, the operator
     is extended with I_2 so it acts trivially on the ancilla qubit.
- 
+
     Returns:
         np.ndarray: Target operator matrix.
     """
     # Get the target unitary U = e^{-iH*t}
     target_unitary = get_target_unitary(CFG.target_hamiltonian, CFG.system_size)
- 
+
     if CFG.use_choi:
-        identity_choi = np.eye(2 ** CFG.system_size)
+        identity_choi = np.eye(2**CFG.system_size)
         target_op = np.kron(identity_choi, target_unitary)
     else:
         target_op = target_unitary
@@ -317,5 +312,5 @@ def get_target_operator() -> np.ndarray:
     # because the ancilla is removed before reaching the discriminator
     if CFG.extra_ancilla and CFG.ancilla_mode == "pass":
         target_op = np.kron(target_op, np.eye(2))
- 
-    return target_op 
+
+    return target_op

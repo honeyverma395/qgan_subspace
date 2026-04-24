@@ -52,12 +52,8 @@ def load_models_if_specified(training_instance):
     )
     gen_model_filename = os.path.basename(CFG.model_gen_path)
     dis_model_filename = os.path.basename(CFG.model_dis_path)
-    load_gen_path = os.path.join(
-        "generated_data", CFG.load_timestamp, "saved_model", gen_model_filename
-    )
-    load_dis_path = os.path.join(
-        "generated_data", CFG.load_timestamp, "saved_model", dis_model_filename
-    )
+    load_gen_path = os.path.join("generated_data", CFG.load_timestamp, "saved_model", gen_model_filename)
+    load_dis_path = os.path.join("generated_data", CFG.load_timestamp, "saved_model", dis_model_filename)
 
     print_and_log(
         f"Attempting to load Generator parameters from: {load_gen_path}\n",
@@ -80,10 +76,7 @@ def load_models_if_specified(training_instance):
         )
         print_and_log("==================================================\n", CFG.log_path)
     else:
-        raise ValueError(
-            "Incompatible or missing model parameters. "
-            "Check the load paths or model compatibility."
-        )
+        raise ValueError("Incompatible or missing model parameters. Check the load paths or model compatibility.")
 
 
 def perturb_all_gen_params_X_percent(gen):
@@ -100,15 +93,11 @@ def perturb_all_gen_params_X_percent(gen):
     perturbation_strength = CFG.warm_start_strength * 2 * math.pi
 
     with torch.no_grad():
-        noise = torch.empty_like(gen.params).uniform_(
-            -perturbation_strength, perturbation_strength
-        )
+        noise = torch.empty_like(gen.params).uniform_(-perturbation_strength, perturbation_strength)
         gen.params.copy_((gen.params + noise) % (2 * math.pi))
 
     # Reset optimizer momentum (parameter landscape has changed)
-    gen.optimizer = torch.optim.SGD(
-        [gen.params], lr=CFG.l_rate, momentum=CFG.momentum_coeff
-    )
+    gen.optimizer = torch.optim.SGD([gen.params], lr=CFG.l_rate, momentum=CFG.momentum_coeff)
 
     # Refresh cached state
     gen._refresh_state()
@@ -136,9 +125,7 @@ def restart_X_percent_of_gen_params_randomly(gen):
             gen.params[indices] = new_vals
 
         # Reset optimizer momentum
-        gen.optimizer = torch.optim.SGD(
-            [gen.params], lr=CFG.l_rate, momentum=CFG.momentum_coeff
-        )
+        gen.optimizer = torch.optim.SGD([gen.params], lr=CFG.l_rate, momentum=CFG.momentum_coeff)
 
         # Refresh cached state
         gen._refresh_state()
