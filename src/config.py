@@ -29,11 +29,11 @@ class Config:
         # -- Run mode ----------------------------
         # Single run or multiple experiments with optional shared initial plateaus.
 
-        self.run_multiple_experiments: bool = False
-        self.common_initial_plateaus: bool = False
+        self.run_multiple_experiments: bool = True
+        self.common_initial_plateaus: bool = True
 
         # If common_initial_plateaus:
-        self.N_initial_plateaus: int = 10
+        self.N_initial_plateaus: int = 5
         self.N_reps_each_init_plateau: int = 1
 
         # If not common_initial_plateaus:
@@ -42,7 +42,7 @@ class Config:
         # -- Training mode ----------------------------
         # use_choi: True = Choi representation, False = Haar random batching
         self.use_choi: bool = True
-        self.batch_size: int = 20  # Only for Haar random 
+        self.batch_size: int = 5  # Only for Haar random 
 
         # Configurations to compare (each dict overrides CFG attributes):
         self.reps_new_config: list[dict[str, Any]] = [
@@ -82,33 +82,15 @@ class Config:
                 "start_ancilla_gates_randomly": True,
                 "ancilla_coupling_layers": "all",
             },
-            {   
-                "extra_ancilla": True,
-                "ancilla_mode": "pass",
-                "ancilla_topology": "bridge",
-                "ancilla_connect_to": None,
-                "do_ancilla_1q_gates": True,
-                "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": [1], # 2nd layer
-            },
-            {   
-                "extra_ancilla": True,
-                "ancilla_mode": "pass",
-                "ancilla_topology": "bridge",
-                "ancilla_connect_to": None,
-                "do_ancilla_1q_gates": True,
-                "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": [2], # last layer
-            },
-            {   
-                "extra_ancilla": True,
-                "ancilla_mode": "pass",
-                "ancilla_topology": "bridge",
-                "ancilla_connect_to": None,
-                "do_ancilla_1q_gates": True,
-                "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": [0], # first layer
-            },
+            # {   
+            #     "extra_ancilla": True,
+            #     "ancilla_mode": "pass",
+            #     "ancilla_topology": "bridge",
+            #     "ancilla_connect_to": None,
+            #     "do_ancilla_1q_gates": True,
+            #     "start_ancilla_gates_randomly": True,
+            #     "ancilla_coupling_layers": [1], # 2nd layer
+            # },
         ]
 
         # -- Loading and warm start ----------------------------
@@ -144,17 +126,17 @@ class Config:
         #   trace   : trace out ancilla, sample pure state
 
         self.system_size: int = 3
-        self.extra_ancilla: bool = True # We begin with no extra qubits, but we add once we reach the Plateau
+        self.extra_ancilla: bool = False # We begin with no extra qubits, but we add once we reach the Plateau
         self.gen_layers: int = 3
         # Ancilla mode define what happens to the ancilla before Discriminator (ancilla.py)
         self.ancilla_mode: Optional[Literal["pass", "project", "trace"]] = "pass" 
         self.ancilla_project_norm: Optional[Literal["re-norm", "pass"]] = "re-norm"
-        self.ancilla_topology: Optional[Literal["disconnected", "ansatz", "bridge", "total", "fake"]] = "bridge"
+        self.ancilla_topology: Optional[Literal["disconnected", "ansatz", "bridge", "total", "fake"]] = "total"
         self.ancilla_connect_to: Optional[int] = None
         self.do_ancilla_1q_gates: bool = True
         self.start_ancilla_gates_randomly: bool = True
         # If all layer have 1q and 2q coupling gates or not
-        self.ancilla_coupling_layers: Literal["all"] | list[int] = [0,2]
+        self.ancilla_coupling_layers: Literal["all"] | list[int] = "all"
 
         # -- Generator ansatz ----------------------------
         #

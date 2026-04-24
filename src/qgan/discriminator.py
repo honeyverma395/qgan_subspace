@@ -97,6 +97,8 @@ class Discriminator(nn.Module):
         self.ancilla_mode: str = CFG.ancilla_mode
         self.target_size: int = CFG.system_size
         self.target_hamiltonian: str = CFG.target_hamiltonian
+        # -- Gradient history (trajectory variance) --
+        self.grad_history: list[np.ndarray] = [] 
 
     # -- matrix representations ---------------------------------
     def get_psi_and_phi(self) -> tuple[torch.Tensor, torch.Tensor]:

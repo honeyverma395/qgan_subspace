@@ -53,7 +53,16 @@ def generate_all_plots(
         scatter_plateau_success(base_path, log_path, n_runs, max_fidelity, run_names, x_label)
         scatter_plateau_avg_success_combined(base_path, log_path, n_runs, max_fidelity, run_names, x_label)
         scatter_plateau_overall(base_path, log_path, n_runs, max_fidelity, run_names, x_label)
-
+    # Gradient trajectory plots
+    plot_grad_trajectory(base_path, log_path, n_runs,
+                         common_initial_plateaus=common_initial_plateaus,
+                         run_names=run_names)
+    plot_grad_joined_all(base_path, log_path, n_runs,
+                            common_initial_plateaus=common_initial_plateaus,
+                            run_names=run_names)
+    plot_grad_joined_mean(base_path, log_path, n_runs,
+                             common_initial_plateaus=common_initial_plateaus,
+                             run_names=run_names)
 
 ########################################################################
 # REAL TIME RUN PLOTTING FUNCTION
@@ -472,9 +481,15 @@ def scatter_plot(base_path, log_path, n_runs, max_fidelity, run_names=None, x_la
             ax1.scatter(xs, [v * 100 for v in vals], color="gray", alpha=0.4, s=18, zorder=3)
         avg_f = (np.nanmean(vals) * 100) if vals else 0.0
         avg_s = (100.0 * np.sum(np.array(vals) >= max_fidelity) / tries) if tries > 0 else 0.0
+        std_f = (np.nanstd(vals) * 100) if vals and len(vals) > 1 else 0.0
         avg_fid_percent.append(avg_f)
         avg_success_percent.append(avg_s)
-
+        ax2.errorbar(
+            [run_idx], [avg_f], yerr=[std_f],
+            fmt="o", color="green", ecolor="green",
+            markeredgecolor="black", markersize=8,
+            elinewidth=1.5, capsize=4, zorder=3,
+        )        
         # Centered overlays on right axis (percent)
         ax2.scatter([run_idx], [avg_f], color="green", edgecolors="black", linewidths=0.5, s=60, zorder=3)
         ax2.scatter([run_idx], [avg_s], color="red", marker="D", s=50, zorder=3)
@@ -596,8 +611,15 @@ def scatter_plateau_clouds(base_path, log_path, n_runs, max_fidelity, run_names=
         if control_vals_flat:
             overall_fid = float(np.nanmean(control_vals_flat)) * 100.0
             overall_succ = 100.0 * np.sum(np.array(control_vals_flat) >= max_fidelity) / len(control_vals_flat)
+            std_fid_control = float(np.nanstd(control_vals_flat)) * 100.0 if len(control_vals_flat) > 1 else 0.0
             ax.scatter([0], [overall_fid], color="green", marker="s", edgecolors="blue", linewidths=0.5, s=60, zorder=5)
             ax2.scatter([0], [overall_succ], color="red", marker="s", edgecolors="blue", linewidths=0.5, s=60, zorder=5)
+            ax.errorbar(
+                [0], [overall_fid], yerr=[std_fid_control],
+                fmt="s", color="green", ecolor="blue",
+                markeredgecolor="blue", markersize=8,
+                elinewidth=1.5, capsize=4, zorder=5,
+            )
             # value tags
             t_f = ax.text(
                 0 + 0.1,
@@ -640,8 +662,15 @@ def scatter_plateau_clouds(base_path, log_path, n_runs, max_fidelity, run_names=
         if all_vals:
             overall_fid = float(np.nanmean(all_vals)) * 100.0
             overall_succ = 100.0 * np.sum(np.array(all_vals) >= max_fidelity) / len(all_vals)
+            std_fid = float(np.nanstd(all_vals)) * 100.0 if len(all_vals) > 1 else 0.0
             # Avg fidelity (green circle) + tag on left axis
             ax.scatter([run_idx], [overall_fid], color="green", edgecolors="black", linewidths=0.5, s=60, zorder=5)
+            ax.errorbar(
+                [run_idx], [overall_fid], yerr=[std_fid],
+                fmt="o", color="green", ecolor="green",
+                markeredgecolor="black", markersize=8,
+                elinewidth=1.5, capsize=4, zorder=5,
+            )            
             t = ax.text(
                 run_idx + 0.1,
                 overall_fid,
@@ -1026,7 +1055,14 @@ def scatter_plateau_overall(base_path, log_path, n_runs, max_fidelity, run_names
         control_tries = len(control_vals)
         avg_fid = float(np.nanmean(control_vals)) * 100.0
         avg_succ = 100.0 * np.sum(np.array(control_vals) >= max_fidelity) / control_tries if control_tries > 0 else 0.0
+        std_fid_control = float(np.nanstd(control_vals)) * 100.0 if len(control_vals) > 1 else 0.0
         # Control as blue squares centered at x=0 on both axes
+        ax1.errorbar(
+            [0], [avg_fid], yerr=[std_fid_control],
+            fmt="s", color="green", ecolor="blue",
+            markeredgecolor="blue", markersize=8,
+            elinewidth=1.5, capsize=4, zorder=4,
+        )
         ax1.scatter([0], [avg_fid], color="green", marker="s", edgecolors="blue", linewidths=0.5, s=60, zorder=4)
         ax2.scatter([0], [avg_succ], color="red", marker="s", edgecolors="blue", linewidths=0.5, s=60, zorder=4)
         # value tags
@@ -1065,10 +1101,17 @@ def scatter_plateau_overall(base_path, log_path, n_runs, max_fidelity, run_names
         tries = len(vals)
         avg_fid = float(np.nanmean(vals) * 100.0) if vals else 0.0
         avg_succ = (100.0 * np.sum(np.array(vals) >= max_fidelity) / tries) if tries > 0 else 0.0
+        std_fid = float(np.nanstd(vals) * 100.0) if vals and len(vals) > 1 else 0.0
 
         # Only if there is data for this run
         if tries > 0:
             # Avg fidelity on left (green circle)
+            ax1.errorbar(
+                [run_idx], [avg_fid], yerr=[std_fid],
+                fmt="o", color="green", ecolor="green",
+                markeredgecolor="black", markersize=8,
+                elinewidth=1.5, capsize=4, zorder=3,
+            )
             ax1.scatter([run_idx], [avg_fid], color="green", edgecolors="black", linewidths=0.5, s=60)
             # Avg success on right (red diamond)
             ax2.scatter([run_idx], [avg_succ], color="red", marker="D", s=55)
@@ -1405,3 +1448,475 @@ def find_if_common_initial_plateaus(base_path):
         return len(plateau_dirs) > 0
     except FileNotFoundError:
         return False
+    
+# ------- GRADIENT TRAJECTORY PLOTS -----------------------------------------------------
+def _find_grad_runs(base_path: str, n_runs: int, common_initial_plateaus: bool):
+    """Walk folder structure, return {run_idx: [(label, grad_path, run_dir), ...]}."""
+    # Initialize a dictionary with empty lists from 1 to n_runs
+    runs: dict[int, list[tuple[str, str, str]]] = {i: [] for i in range(1, n_runs + 1)}
+
+    if common_initial_plateaus:
+      # Match paths ending in: initial_plateau_X/repeated_changed_runY/Z
+      # X (plateau), Y (run_idx), and Z (rep)
+        pat = re.compile(
+            r"initial_plateau_(\d+)[/\\]repeated_changed_run(\d+)[/\\](\d+)$"
+        )
+        for root, _, files in os.walk(base_path):
+            # Skip this directory if it doesn't contain the gradient history file
+            if "grad_history.npy" not in files:
+                continue
+            # Check if the current folder path matches our pattern
+            m = pat.search(root)
+            if not m:
+                continue
+            # Extract the captured groups and convert them to integers
+            plateau, run_idx, rep = int(m[1]), int(m[2]), int(m[3])
+            # If the extracted run_idx is within our expected range, save its details
+            if run_idx in runs:
+                runs[run_idx].append(
+                    (f"plateau{plateau}_rep{rep}",                # Custom label for the plot
+                     os.path.join(root, "grad_history.npy"),      # Full path to the file
+                     root))                                       # The directory containing the file
+    else:
+        #  Match paths ending in: experimentX/Y
+        #  X (run_idx) and Y (rep)  
+        pat = re.compile(r"experiment(\d+)[/\\](\d+)$")
+        # Same as before
+        for root, _, files in os.walk(base_path):
+            if "grad_history.npy" not in files:
+                continue
+            m = pat.search(root)
+            if not m:
+                continue
+            run_idx, rep = int(m[1]), int(m[2])
+            if run_idx in runs:
+                runs[run_idx].append(
+                    (f"rep{rep}", os.path.join(root, "grad_history.npy"), root))
+
+    return runs
+
+def plot_grad_trajectory(base_path, log_path, n_runs, common_initial_plateaus=False,
+                          run_names=None):
+    """Per-run detail plot: one figure per run, all repetitions overlaid.
+
+    Each curve is Var_theta[dL/dtheta] across ALL params at each iteration.
+    """
+    # Locate all the gradient history files grouped by their run index
+    runs = _find_grad_runs(base_path, n_runs, common_initial_plateaus)
+    
+    # Iterate over each distinct run (experiment configuration)
+    for run_idx, entries in runs.items():
+        if not entries:
+            # Skip if there are no gradient files found for this run
+            continue
+        # Initialize a new matplotlib figure and axis for this specific run
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax_f = ax.twinx()  # right axis for fidelity
+        cmap = plt.cm.tab10
+
+        for rep_i, (label, grad_path, run_dir) in enumerate(entries):
+            G = np.load(grad_path)
+            var_t = np.var(G, axis=1)
+            color = cmap(rep_i % 10)
+            ax.plot(np.arange(G.shape[0]), var_t,
+                    color=color, linewidth=1.3, alpha=0.85, label=label)
+            # Fidelity overlay on right axis (thinner, dashed, same color)
+            fids = _load_fidelity_curve(run_dir)
+            if fids is not None:
+                ax_f.plot(np.arange(fids.size), fids,
+                          color=color, linewidth=0.8, alpha=0.6, 
+                          linestyle="--", label=f"{label} (Fid)")
+
+        ax.set_yscale("log")
+        ax.set_xlabel("training iteration")
+        ax.set_ylabel(r"Var$_{\theta}[\partial L/\partial \theta]$")
+        ax_f.set_ylabel("Fidelity")
+        ax_f.set_ylim(0, 1.02)
+        run_label = _base_label_for_run(run_idx, run_names)
+        ax.set_title(f"Gradient variance & fidelity — {run_label}")
+        ax.grid(alpha=0.3)
+        # Combine legends: rep entries + one fidelity proxy
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax_f.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, fontsize=7, ncol=2, loc='best')
+
+        fig.tight_layout()
+        save_path = os.path.join(base_path, f"grad_trajectory_run{run_idx}.png")
+        fig.savefig(save_path, dpi=120)
+        print_and_log(f"Saved plot to {save_path}", log_path)
+        plt.close(fig)
+
+# Joined TRAJECTORIES: initial plateau + changed runs
+
+def _find_initial_plateau_grads(base_path: str) -> dict[int, str]:
+    """Return {plateau_id: grad_history.npy path} for initial plateau runs."""
+    out: dict[int, str] = {}
+    pat = re.compile(r"initial_plateau_(\d+)$")
+    for root, _, files in os.walk(base_path):
+        if "grad_history.npy" not in files:
+            continue
+        m = pat.search(root)
+        if m:
+            out[int(m.group(1))] = os.path.join(root, "grad_history.npy")
+    return out
+
+
+def _find_control_grads_by_plateau(base_path: str) -> dict[int, list[str]]:
+    """Return {plateau_id: [grad_history paths]} for repeated_control runs."""
+    out: dict[int, list[str]] = {}
+    pat = re.compile(r"initial_plateau_(\d+)[/\\]repeated_control")
+    for root, _, files in os.walk(base_path):
+        if "grad_history.npy" not in files:
+            continue
+        m = pat.search(root)
+        if m:
+            out.setdefault(int(m.group(1)), []).append(
+                os.path.join(root, "grad_history.npy"))
+    return out
+
+
+def _find_changed_grads_by_plateau(base_path: str, run_idx: int) -> dict[int, list[str]]:
+    """Return {plateau_id: [grad_history paths]} for repeated_changed_runN."""
+    out: dict[int, list[str]] = {}
+    pat = re.compile(
+        rf"initial_plateau_(\d+)[/\\]repeated_changed_run{run_idx}[/\\](\d+)$"
+    )
+    for root, _, files in os.walk(base_path):
+        if "grad_history.npy" not in files:
+            continue
+        m = pat.search(root)
+        if m:
+            out.setdefault(int(m.group(1)), []).append(
+                os.path.join(root, "grad_history.npy"))
+    return out
+
+
+def _build_Joined_trajectory(phase1_path: str, phase2_path: str) -> np.ndarray:
+    """Concatenate Initial Plateau and Changed Run gradient histories into one variance curve.
+
+    Changed Run may have a different number of params than Initial Plateau (when ancilla is
+    added). We compute var-across-params per iteration independently for each
+    phase, which is well-defined regardless of param count.
+
+    Returns a 1D array of shape (T1 + T2,).
+    """
+    G1 = np.load(phase1_path)          # (T1, n1)
+    G2 = np.load(phase2_path)          # (T2, n2), n2 may differ from n1
+    v1 = np.var(G1, axis=1)            # (T1,)
+    v2 = np.var(G2, axis=1)            # (T2,)
+    return np.concatenate([v1, v2])
+
+
+def _collect_Joined_per_config(base_path: str, n_runs: int):
+    """Build Joined trajectories per (config_label, plateau_id, rep).
+
+    Returns:
+        Joined: dict[str, list[np.ndarray]] — label -> list of trajectories
+        insert_iter: int or None — iteration index where Changed Run starts.
+                     Assumes Initial Plateau length is constant across plateaus.
+    """
+    plateau_grads = _find_initial_plateau_grads(base_path)
+    if not plateau_grads:
+        return {}, None
+
+    # -- control ---------------
+    Joined: dict[str, list[np.ndarray]] = {}
+    ctrl = _find_control_grads_by_plateau(base_path)
+    ctrl_curves = []
+    for pid, paths in ctrl.items():
+        if pid not in plateau_grads:
+            continue
+        for p2 in paths:
+            ctrl_curves.append(_build_Joined_trajectory(plateau_grads[pid], p2))
+    if ctrl_curves:
+        Joined["Control"] = ctrl_curves
+
+    # -- each changed run ------------------
+    for run_idx in range(1, n_runs + 1):
+        run_paths = _find_changed_grads_by_plateau(base_path, run_idx)
+        run_curves = []
+        for pid, paths in run_paths.items():
+            if pid not in plateau_grads:
+                continue
+            for p2 in paths:
+                run_curves.append(_build_Joined_trajectory(plateau_grads[pid], p2))
+        if run_curves:
+            Joined[f"Run {run_idx}"] = run_curves
+
+    # -- insertion iteration (length of Initial Plateau) -----------------
+    # Pick any initial plateau path to get T1
+    any_p1 = next(iter(plateau_grads.values()))
+    insert_iter = np.load(any_p1).shape[0]
+    return Joined, insert_iter
+
+
+def plot_grad_joined_all(base_path, log_path, n_runs,
+                            common_initial_plateaus=False, run_names=None):
+    """Plot A: every Joined trajectory as a thin transparent line."""
+    if not common_initial_plateaus:
+        return
+    Joined, insert_iter = _collect_Joined_per_config(base_path, n_runs)
+    if not Joined:
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    cmap = plt.cm.tab10
+    colors: dict[str, tuple] = {}
+    color_idx = 0
+    for label in Joined.keys():
+        # Use run_names for display if available
+        if label.startswith("Run "):
+            run_idx = int(label.split()[1])
+            display = _base_label_for_run(run_idx, run_names)
+        else:
+            display = label
+        colors[label] = (cmap(color_idx % 10), display)
+        color_idx += 1
+
+    for label, curves in Joined.items():
+        color, display = colors[label]
+        for i, curve in enumerate(curves):
+            ax.plot(np.arange(curve.size), curve, color=color,
+                    linewidth=0.6, alpha=0.3,
+                    label=display if i == 0 else None)
+
+    if insert_iter is not None:
+        ax.axvline(insert_iter, color="black", linestyle=":", linewidth=1.2,
+                   alpha=0.7, label=f"Ancilla insertion (iter {insert_iter})")
+
+    ax.set_yscale("log")
+    ax.set_xlabel("training iteration (Initial Plateau + Changed Run)")
+    ax.set_ylabel(r"Var$_{\theta}[\partial L/\partial \theta]$")
+    ax.set_title("Gradient variance — all Joined trajectories")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8, loc="best")
+    fig.tight_layout()
+    save_path = os.path.join(base_path, "grad_Joined_all.png")
+    fig.savefig(save_path, dpi=120)
+    print_and_log(f"Saved plot to {save_path}", log_path)
+    plt.close(fig)
+
+
+def plot_grad_joined_mean(base_path, log_path, n_runs,
+                             common_initial_plateaus=False, run_names=None):
+    """Plot B: mean Joined trajectory per config (one line each).
+    + a zoomed version around the insertion point.
+    """
+    if not common_initial_plateaus:
+        return
+    Joined, insert_iter = _collect_Joined_per_config(base_path, n_runs)
+    if not Joined:
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    cmap = plt.cm.tab10
+    color_idx = 0
+    # Cache mean curves for the zoom plot
+    mean_curves: dict[str, tuple[np.ndarray, tuple, str]] = {}
+
+    
+    for label, curves in Joined.items():
+        # Pad shorter curves with NaN so early-exit runs don't truncate the mean.
+        # at each iteration.
+        max_T = max(c.size for c in curves)
+        V = np.full((len(curves), max_T), np.nan)
+        for i, c in enumerate(curves):
+            V[i, :c.size] = c
+
+        mean_v = np.nanmean(V, axis=0)
+        n_active = np.sum(~np.isnan(V), axis=0)  # reps alive per iter
+
+        if label.startswith("Run "):
+            run_idx = int(label.split()[1])
+            display = _base_label_for_run(run_idx, run_names)
+        else:
+            display = label
+        color = cmap(color_idx % 10)
+        color_idx += 1
+
+        ax.plot(np.arange(max_T), mean_v, color=color, linewidth=2.0,
+                label=f"{display} — mean (n={V.shape[0]})")
+        mean_curves[label] = (mean_v, n_active, color, display)
+
+    if insert_iter is not None:
+        ax.axvline(insert_iter, color="black", linestyle=":", linewidth=1.2,
+                   alpha=0.7, label=f"Ancilla insertion (iter {insert_iter})")
+
+    ax.set_yscale("log")
+    ax.set_xlabel("training iteration (Initial Plateau + Changed Run)")
+    ax.set_ylabel(r"Var$_{\theta}[\partial L/\partial \theta]$  (mean over reps)")
+    ax.set_title("Gradient variance — mean Joined trajectory per config")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=9, loc="best")
+    fig.tight_layout()
+    save_path = os.path.join(base_path, "grad_Joined_mean.png")
+    fig.savefig(save_path, dpi=120)
+    print_and_log(f"Saved plot to {save_path}", log_path)
+    plt.close(fig)
+
+    # -- Zoomed view around insertion --------------------------------------
+    if insert_iter is None:
+        return
+    ZOOM = 100  # iterations after insertion
+    fig2, ax2 = plt.subplots(figsize=(9, 5))
+    zoom_end = insert_iter + ZOOM
+    for label, (mean_v, n_active, color, display) in mean_curves.items():
+        end = min(zoom_end, mean_v.size)
+        start = max(0, insert_iter - 10)
+        ax2.plot(np.arange(start, end), mean_v[start:end],
+                 color=color, linewidth=2.0, label=f"{display} — mean")
+    ax2.axvline(insert_iter, color="black", linestyle=":", linewidth=1.2,
+                alpha=0.7, label=f"Ancilla insertion (iter {insert_iter})")
+    ax2.set_yscale("log")
+    ax2.set_xlabel("training iteration")
+    ax2.set_ylabel(r"Var$_{\theta}[\partial L/\partial \theta]$")
+    ax2.set_title(f"Zoom: {ZOOM} iterations after ancilla insertion")
+    ax2.grid(alpha=0.3)
+    ax2.legend(fontsize=8, loc="best", ncol=2)
+    fig2.tight_layout()
+    save_path2 = os.path.join(base_path, "grad_Joined_mean_zoom.png")
+    fig2.savefig(save_path2, dpi=120)
+    print_and_log(f"Saved plot to {save_path2}", log_path)
+    plt.close(fig2)
+
+    # -- n_active subplot: how many reps still training at each iter ------
+    fig3, ax3 = plt.subplots(figsize=(10, 3.5))
+    for label, (mean_v, n_active, color, display) in mean_curves.items():
+        ax3.plot(np.arange(n_active.size), n_active,
+                 color=color, linewidth=1.8, label=display)
+    if insert_iter is not None:
+        ax3.axvline(insert_iter, color="black", linestyle=":", linewidth=1.2,
+                    alpha=0.7)
+    ax3.set_xlabel("training iteration")
+    ax3.set_ylabel("reps still running")
+    ax3.set_title("Number of reps contributing to the mean (reps exit when they converge)")
+    ax3.grid(alpha=0.3)
+    ax3.legend(fontsize=9, loc="best")
+    fig3.tight_layout()
+    save_path3 = os.path.join(base_path, "grad_Joined_n_active.png")
+    fig3.savefig(save_path3, dpi=120)
+    print_and_log(f"Saved plot to {save_path3}", log_path)
+    plt.close(fig3)
+
+def _load_fidelity_curve(run_dir: str) -> np.ndarray | None:
+    """Load the fidelity curve from <run_dir>/fidelities/log_fidelity_loss.txt.
+
+    The file is saved as fidelities stacked on top of losses (single column,
+    length 2*T). Returns only the fidelities (first half).
+    """
+    path = os.path.join(run_dir, "fidelities", "log_fidelity_loss.txt")
+    if not os.path.exists(path):
+        return None
+    try:
+        data = np.loadtxt(path)
+        if data.ndim != 1 or data.size % 2 != 0:
+            return None
+        return data[: data.size // 2]
+    except (OSError, IOError, ValueError):
+        return None
+    
+
+# -- Create a specific BP plot
+def plot_grad_trajectory_by_plateau(base_path, log_path, n_runs, plateau_ids,
+                                     run_names=None, include_control=True,
+                                     include_initial=True):
+    """Per-plateau detail plot: one figure per (plateau, run), all reps overlaid.
+
+    For each plateau in `plateau_ids`, generates one figure per run (and optionally
+    control) containing: gradient variance (log, left axis) + fidelity (right axis)
+    for every repetition, plus optionally the initial plateau trajectory prepended.
+
+    Args:
+        plateau_ids: int or list[int]. Which initial_plateau_<X> to include.
+        include_control: also generate a figure for the control (no change) reps.
+        include_initial: prepend the initial_plateau_<X> trajectory to each rep
+            (concatenated), with a vertical line marking the insertion iter.
+    """
+    if isinstance(plateau_ids, int):
+        plateau_ids = [plateau_ids]
+
+    plateau_grads = _find_initial_plateau_grads(base_path)  # {pid: grad_path}
+
+    for pid in plateau_ids:
+        if pid not in plateau_grads:
+            print_and_log(f"[grad_by_plateau] plateau {pid} not found, skipping", log_path)
+            continue
+
+        init_grad_path = plateau_grads[pid]
+        init_run_dir = os.path.dirname(init_grad_path)
+
+        # Build list of (config_label, rep_dirs) to plot, one figure each
+        configs: list[tuple[str, list[str]]] = []
+        if include_control:
+            ctrl = _find_control_grads_by_plateau(base_path).get(pid, [])
+            ctrl_dirs = [os.path.dirname(p) for p in ctrl]
+            if ctrl_dirs:
+                configs.append(("Control", ctrl_dirs))
+        for run_idx in range(1, n_runs + 1):
+            run_paths = _find_changed_grads_by_plateau(base_path, run_idx).get(pid, [])
+            run_dirs = [os.path.dirname(p) for p in run_paths]
+            if run_dirs:
+                label = _base_label_for_run(run_idx, run_names)
+                configs.append((label, run_dirs))
+
+        if not configs:
+            continue
+
+        for cfg_label, rep_dirs in configs:
+            fig, ax = plt.subplots(figsize=(9, 5))
+            ax_f = ax.twinx()
+            cmap = plt.cm.tab10
+
+            for rep_i, rep_dir in enumerate(rep_dirs):
+                color = cmap(rep_i % 10)
+                # --- variance ---
+                v_rep = np.var(np.load(os.path.join(rep_dir, "grad_history.npy")), axis=1)
+                if include_initial:
+                    v_init = np.var(np.load(init_grad_path), axis=1)
+                    var_curve = np.concatenate([v_init, v_rep])
+                else:
+                    var_curve = v_rep
+                ax.plot(np.arange(var_curve.size), var_curve,
+                        color=color, linewidth=1.3, alpha=0.85,
+                        label=f"rep{rep_i}")
+
+                # --- fidelity ---
+                f_rep = _load_fidelity_curve(rep_dir)
+                if include_initial:
+                    f_init = _load_fidelity_curve(init_run_dir)
+                    parts = [x for x in (f_init, f_rep) if x is not None]
+                    fid_curve = np.concatenate(parts) if parts else None
+                else:
+                    fid_curve = f_rep
+                if fid_curve is not None:
+                    ax_f.plot(np.arange(fid_curve.size), fid_curve,
+                              color=color, linewidth=0.8, alpha=0.6,
+                              linestyle="--", label=f"rep{rep_i} (Fid)")
+
+            # insertion line
+            if include_initial:
+                insert_iter = np.load(init_grad_path).shape[0]
+                ax.axvline(insert_iter, color="black", linestyle=":",
+                           linewidth=1.2, alpha=0.7,
+                           label=f"Ancilla insertion (iter {insert_iter})")
+
+            ax.set_yscale("log")
+            ax.set_xlabel("training iteration")
+            ax.set_ylabel(r"Var$_{\theta}[\partial L/\partial \theta]$")
+            ax_f.set_ylabel("Fidelity")
+            ax_f.set_ylim(0, 1.02)
+            ax.set_title(f"Plateau {pid} — {cfg_label}")
+            ax.grid(alpha=0.3)
+            h1, l1 = ax.get_legend_handles_labels()
+            h2, l2 = ax_f.get_legend_handles_labels()
+            ax.legend(h1 + h2, l1 + l2, fontsize=7, ncol=2, loc="best")
+            fig.tight_layout()
+
+            # sanitize label for filename
+            safe_label = re.sub(r"[^A-Za-z0-9_\-]+", "_", cfg_label)
+            save_path = os.path.join(
+                base_path, f"grad_trajectory_plateau{pid}_{safe_label}.png"
+            )
+            fig.savefig(save_path, dpi=120)
+            print_and_log(f"Saved plot to {save_path}", log_path)
+            plt.close(fig)

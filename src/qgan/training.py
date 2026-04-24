@@ -168,6 +168,36 @@ class Training:
         endtime = datetime.now() 
         print_and_log(f"\nRun took: {endtime - starttime} time.", CFG.log_path)
 
+        # -- Save gradient history --
+        if self.gen.grad_history:
+            grad_array = np.stack(self.gen.grad_history, axis=0)
+            np.save(f"{CFG.base_data_path}/grad_history.npy", grad_array)
+            if self.gen.ancilla:
+                anc_idx = np.array(self.gen._get_ancilla_param_indices(),
+                                   dtype=int)
+                np.save(f"{CFG.base_data_path}/ancilla_indices.npy", anc_idx)
+            print_and_log(
+                f"\nSaved gradient history: shape {grad_array.shape}",
+                CFG.log_path,
+            )
+        # -- Save discriminator gradient history --
+        if self.dis.grad_history:
+            dis_grad_array = np.stack(self.dis.grad_history, axis=0)
+            np.save(f"{CFG.base_data_path}/dis_grad_history.npy", dis_grad_array)
+            print_and_log(
+                f"\nSaved discriminator gradient history: shape {dis_grad_array.shape}",
+                CFG.log_path,
+            )
+
+    def _record_dis_grad(self) -> None:
+        """Record flat gradient vector over all discriminator parameters."""
+        pieces = []
+        for p in self.dis.parameters():
+            if p.grad is not None:
+                pieces.append(p.grad.detach().cpu().numpy().ravel().copy())
+        if pieces:
+            self.dis.grad_history.append(np.concatenate(pieces))
+
     # -- Choi mode (max entangled state) ------------------
     def _train_step_choi(self, epoch_iter: int,
                          fidelities: list, losses: list):
@@ -183,6 +213,7 @@ class Training:
             self.dis.optimizer.zero_grad()
             dis_loss = self.dis.compute_loss(self.final_target_state, final_gen_detached)
             dis_loss.backward()
+            self._record_dis_grad()
             self.dis.optimizer.step()
 
         # -- Generator steps 
@@ -228,6 +259,7 @@ class Training:
                 dis_loss = dis_loss + self.dis.compute_loss(t, g)
             dis_loss = dis_loss / B
             dis_loss.backward()
+            self._record_dis_grad()
             self.dis.optimizer.step()
  
         # -- Generator: averaged loss with gradients --
