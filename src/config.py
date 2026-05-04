@@ -42,29 +42,29 @@ class Config:
 
         # -- Training mode ----------------------------
         # use_choi: True = Choi representation, False = Haar random batching
-        self.use_choi: bool = True
-        self.batch_size: int = 5  # Only for Haar random 
+        self.use_choi: bool = False
+        self.batch_size: int = 50  # Only for Haar random 
 
         # Configurations to compare (each dict overrides CFG attributes):
         self.reps_new_config: list[dict[str, Any]] = [
-            # {
-            #     "extra_ancilla": True,
-            #     "ancilla_mode": "pass",
-            #     "ancilla_topology": "ansatz",
-            #     "ancilla_connect_to": None,
-            #     "do_ancilla_1q_gates": True,
-            #     "start_ancilla_gates_randomly": True,
-            #     "ancilla_coupling_layers": "all",
-            # },
-            # {
-            #     "extra_ancilla": True,
-            #     "ancilla_mode": "pass",
-            #     "ancilla_topology": "bridge",
-            #     "ancilla_connect_to": 1,
-            #     "do_ancilla_1q_gates": True,
-            #     "start_ancilla_gates_randomly": True,
-            #     "ancilla_coupling_layers": "all",
-            # },
+            {
+                "extra_ancilla": True,
+                "ancilla_mode": "pass",
+                "ancilla_topology": "ansatz",
+                "ancilla_connect_to": None,
+                "do_ancilla_1q_gates": True,
+                "start_ancilla_gates_randomly": True,
+                "ancilla_coupling_layers": "all",
+            },
+            {
+                "extra_ancilla": True,
+                "ancilla_mode": "pass",
+                "ancilla_topology": "bridge",
+                "ancilla_connect_to": 1,
+                "do_ancilla_1q_gates": True,
+                "start_ancilla_gates_randomly": True,
+                "ancilla_coupling_layers": "all",
+            },
             {
                 "extra_ancilla": True,
                 "ancilla_mode": "pass",
@@ -146,7 +146,7 @@ class Config:
         #
         # Custom: specify gate order in custom_ansatz_terms.
         #   Available: "X", "Y", "Z", "XX", "YY", "ZZ"
-        self.gen_ansatz: Literal["ZZ_YY_XX_Z", "ZZ_Z_X", "custom"] = "ZZ_Z_X"
+        self.gen_ansatz: Literal["ZZ_YY_XX_Z", "ZZ_Z_X", "custom"] = "ZZ_YY_XX_Z"
         self.custom_ansatz_terms: Optional[list[str]] = ["ZZ", "XX", "Y", "X"]
 
         # -- Target Hamiltonian ----------------------------
@@ -156,8 +156,8 @@ class Config:
         #   Available: I, X, Y, Z, XX, XZ, ZZ, ZZZ, ZZZZ, XZX, XXXX
         self.time_to_evolve: float = 1.0  # Time to evolve with the Hamiltonian, for the target state preparation.
         self.target_hamiltonian: Literal["cluster_h", "rotated_surface_h", "ising_h", "custom_h"] = "custom_h"
-        self.custom_hamiltonian_terms: Optional[list[str]] = ["ZZZ"]
-        self.custom_hamiltonian_strengths: Optional[list[float]] = [1.0]
+        self.custom_hamiltonian_terms: Optional[list[str]] = ["XXX","ZZZ"]
+        self.custom_hamiltonian_strengths: Optional[list[float]] = [1.0,0.4]
 
         # -- Optimiser --------------------------------------
         self.l_rate: float = 0.01

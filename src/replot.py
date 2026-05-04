@@ -21,12 +21,12 @@ from tools.plot_hub import find_if_common_initial_plateaus, generate_all_plots
 
 # ------- Parameters for the replotting script --------------
 # EXAMPLE TO EDIT PARAMETERS:
-time_stamp_to_replot = "2026-04-24__17-08-13" 
+time_stamp_to_replot = "2026-04-27__12-01-35" 
 max_fidelity = 0.99
 x_label = "Ancilla Topology"
 run_names = [
-    # "Ansatz",
-    # "Short Bridge",
+    "Ansatz",
+    "Short Bridge",
     "Bridge",
     "Total",
 ]
@@ -55,7 +55,7 @@ generate_all_plots(
 )
 
 # -- Replotting for the specified Barren Plateau --------------
-focus_plateau_ids = [1,3]   # None
+focus_plateau_ids = [1,5]   # None
 
 if focus_plateau_ids:
     from tools.plot_hub import plot_grad_trajectory_by_plateau
