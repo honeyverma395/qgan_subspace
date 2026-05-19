@@ -138,7 +138,7 @@ class Ansatz:
     def _apply_ancilla_couplings(params, idx: int, terms: list[str], system_wires: list[int], ancilla_wire: int) -> int:
         """Apply ancilla 2q couplings according to topology.
 
-        Uses the same 2q gate types from the term list.
+        Uses the same 2q gate typxes from the term list.
         Returns updated param index.
         """
         n_sys = len(system_wires)
@@ -362,13 +362,37 @@ class Generator:
 
         return indices
 
+    def _effective_params(self) -> torch.Tensor:
+        """Params tensor seen by the QNode.
+
+        If ancilla_training is False, returns a tensor whose values match self.params,
+        but with ancilla gates detached from the autograd graph. The loss therefore 
+        does NOT propagate through ancilla params.
+        """
+        if not self.ancilla or CFG.ancilla_training:
+            return self.params
+
+        # Build a boolean mask: True where the slot is trainable (system),
+        # False where it is frozen (ancilla).
+        if not hasattr(self, "_train_mask") or self._train_mask is None:
+            mask = torch.ones(self.n_params, dtype=torch.bool)
+            anc_idx = self._get_ancilla_param_indices()
+            mask[anc_idx] = False
+            self._train_mask = mask  # cached; layout doesn't change at runtime
+
+        # torch.where keeps system values on the autograd graph and substitutes
+        # detached values for ancilla gates. Numerical values are identical to
+        # self.params. the only difference is the graph.
+        return torch.where(self._train_mask, self.params, self.params.detach())
+    
     # -- forward pass ------------------------------------------------------
     def get_total_gen_state(self, input_state=None) -> torch.Tensor:
         """Run the circuit and return the full statevector as a 1D torch tensor."""
+        params = self._effective_params()
         if CFG.use_choi:
-            return self.circuit(self.params, self.choi_input)
+            return self.circuit(params, self.choi_input)
         else:
-            return self.circuit(self.params, input_state)
+            return self.circuit(params, input_state)
 
     def get_final_gen_state(self, total_gen_state: torch.Tensor) -> torch.Tensor:
         """Apply ancilla post-processing and return the final state for the discriminator.

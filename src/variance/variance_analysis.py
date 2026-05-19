@@ -53,7 +53,7 @@ from qgan.cost_functions import _calc_wasserstein
 from qgan.ancilla import (
     get_final_gen_state_torch,
     get_max_entangled_state_with_ancilla_if_needed,
-    haar_random_batch,
+    get_random_batch,
     prepare_batch_targets,
 )
 from qgan.target import get_target_operator
@@ -67,7 +67,7 @@ from qgan.generator import (
 
 
 # -- Script parameters -------------------------------------------------
-N_SAMPLES = 20000
+N_SAMPLES = 10000
 SEED = None  # For reproducibility
 
 
@@ -146,6 +146,53 @@ def _wasserstein_loss(
 
 
 # -- Gradient sampling -------------------------------------------------
+def _get_layerwise_param_indices(gen) -> list[dict]:
+    """Per layer, return {'sys': [...], '1q_anc': [...], '2q_anc': [...]}.
+ 
+    Walks the flat parameter tensor in the same order as Ansatz.apply,
+    so indices match what gen.params holds. Mirrors the structure of
+    _get_layerwise_ancilla_indices but also captures system slots.
+    """
+    terms = _get_ansatz_terms()
+    n_1q_terms = sum(1 for t in terms if t in _1Q_GATES)
+    n_2q_terms = sum(1 for t in terms if t in _2Q_GATES)
+    n_sys = CFG.system_size
+ 
+    layout: list[dict] = []
+    idx = 0
+    for layer_idx in range(CFG.gen_layers):
+        sys_slots: list[int] = []
+ 
+        # System 1Q gates: n_1q_terms per qubit
+        for _ in range(n_1q_terms * n_sys):
+            sys_slots.append(idx)
+            idx += 1
+        # System 2Q gates: n_2q_terms per neighbouring pair
+        for _ in range(n_2q_terms * (n_sys - 1)):
+            sys_slots.append(idx)
+            idx += 1
+ 
+        idx_1q_anc, idx_2q_anc = [], []
+ 
+        # Ancilla 1Q gates (only if the layer has ancilla coupling)
+        if CFG.extra_ancilla and CFG.do_ancilla_1q_gates and _layer_coupling(layer_idx):
+            for _ in range(n_1q_terms):
+                idx_1q_anc.append(idx)
+                idx += 1
+ 
+        # Ancilla 2Q couplings
+        if CFG.extra_ancilla and _layer_coupling(layer_idx):
+            n_anc_2q = _count_ancilla_coupling_params(n_2q_terms, n_sys)
+            for _ in range(n_anc_2q):
+                idx_2q_anc.append(idx)
+                idx += 1
+ 
+        layout.append({
+            "sys": sys_slots,
+            "1q_anc": idx_1q_anc,
+            "2q_anc": idx_2q_anc,
+        })
+    return layout
 
 # -- Per-config parameter layout --------------------------------------
 def _get_layerwise_ancilla_indices(gen) -> list[dict]:
@@ -164,21 +211,21 @@ def _get_layerwise_ancilla_indices(gen) -> list[dict]:
 
     layout: list[dict] = []
     idx = 0
-    
     for layer_idx in range(CFG.gen_layers):
-        # Skip the indices that belong to the core system qubits
+        # System params
         idx += n_1q_terms * n_sys
         idx += n_2q_terms * (n_sys - 1)
 
         idx_1q_anc, idx_2q_anc = [], []
-        
-        # If this layer utilizes ancilla coupling, track their parameter indices
+
+        # 1Q ancilla gates
+        if CFG.extra_ancilla and CFG.do_ancilla_1q_gates and _layer_coupling(layer_idx):
+            for _ in range(n_1q_terms):
+                idx_1q_anc.append(idx)
+                idx += 1
+
+        # 2Q ancilla gates
         if CFG.extra_ancilla and _layer_coupling(layer_idx):
-            if CFG.do_ancilla_1q_gates:
-                for _ in range(n_1q_terms):
-                    idx_1q_anc.append(idx)
-                    idx += 1
-                    
             n_anc_2q = _count_ancilla_coupling_params(n_2q_terms, n_sys)
             for _ in range(n_anc_2q):
                 idx_2q_anc.append(idx)
@@ -204,6 +251,8 @@ def _system_indices(gen) -> np.ndarray:
 def sample_gradients_coupled(
     n_samples: int,
     configs: list[str],
+    out_dir: str | None = None,        
+    checkpoint_every: int = 1000,      
 ) -> dict[str, np.ndarray]:
     """
     Samples gradients for multiple circuit configurations while sharing random seeds.
@@ -252,6 +301,10 @@ def sample_gradients_coupled(
         name: np.zeros((n_samples, probe[name]["n_params"]), dtype=np.float64)
         for name in configs
     }
+    thetas: dict[str, np.ndarray] = {
+        name: np.zeros((n_samples, probe[name]["n_params"]), dtype=np.float64)
+        for name in configs
+    }   
 
     starttime = datetime.now()
     
@@ -281,7 +334,7 @@ def sample_gradients_coupled(
                     )
                     dim = 2 ** CFG.system_size
                     B = CFG.batch_size
-                    batch_raw, batch_inputs = haar_random_batch(dim, B)
+                    batch_raw, batch_inputs = get_random_batch(dim, B)
                     batch_targets = prepare_batch_targets(batch_raw, batch_inputs, target_op)
 
                 # Initialize the Discriminator. 
@@ -327,6 +380,7 @@ def sample_gradients_coupled(
                 # Load the assembled parameters into the generator
                 with torch.no_grad():
                     gen.params.copy_(torch.tensor(theta, dtype=gen.params.dtype))
+                    thetas[name][i] = theta.copy()
 
                 if gen.params.grad is not None:
                     gen.params.grad.zero_()
@@ -350,9 +404,21 @@ def sample_gradients_coupled(
         if (i + 1) % max(1, n_samples // 10) == 0:
             print(f"    sample {i + 1}/{n_samples}")
 
+        if out_dir is not None and (i + 1) % checkpoint_every == 0:
+            for name in configs:
+                g = grads[name][: i + 1]
+                np.save(os.path.join(out_dir, f"grads_{name}.npy"), g)
+                t = thetas[name][: i + 1]
+                np.save(os.path.join(out_dir, f"thetas_{name}.npy"), t)
+                abs_g = np.abs(g)
+                print(f"    [chk i={i+1}] {name}: "
+                    f"median|g|={np.median(abs_g):.2e}, "
+                    f"max|g|={abs_g.max():.2e}, "
+                    f"mean Var={np.var(g, axis=0).mean():.2e}")
+                
     endtime = datetime.now()
     print(f"\n Run took: {endtime - starttime} time.")
-    return grads
+    return grads, thetas
 
 # -- Helper for Batch mode ------------
 def _wasserstein_loss_batch(
@@ -448,7 +514,7 @@ def plot_variance_sweep(
             f"Variance per parameter: "
             f"(N={N_SAMPLES} samples, {CFG.system_size} qubits, "
             f"{CFG.gen_layers} layers, ansatz={CFG.gen_ansatz}), "
-            f"Batch Mode, Batch size={CFG.batch_size} \n"
+            f"Batch Mode={CFG.batch_mode}, Batch size={CFG.batch_size} \n"
             f"{h_str}"
         )
     ax.grid(True, which="both", alpha=0.3)
@@ -514,8 +580,9 @@ def run_sweep() -> None:
     try:
         # Coupled sampling: shared theta_sys, shared discriminator, shared
         # ancilla random pools (per layer, extended on demand).
-        grads_by_config = sample_gradients_coupled(N_SAMPLES, configs)
-
+        grads_by_config, thetas_by_config = sample_gradients_coupled(
+            N_SAMPLES, configs, out_dir=out_dir, checkpoint_every=1000
+        )
         for name in configs:
             _apply_config(name)
             try:
@@ -526,11 +593,15 @@ def run_sweep() -> None:
                 _restore_cfg(snapshot)
 
             var_sys = np.var(grads_sys, axis=0)
-            var_anc = np.var(grads_anc, axis=0) if grads_anc.size > 0 else np.array([])
+            if CFG.ancilla_training:
+                var_anc = np.var(grads_anc, axis=0) if grads_anc.size > 0 else np.array([])
+            else:
+                var_anc = np.array([])  # ancilla frozen
 
             np.save(os.path.join(out_dir, f"grads_{name}.npy"), grads)
+            np.save(os.path.join(out_dir, f"thetas_{name}.npy"), thetas_by_config[name])          
             np.save(os.path.join(out_dir, f"variance_{name}.npy"),
-                    np.concatenate([var_sys, var_anc]))
+            np.concatenate([var_sys, var_anc]))
 
             results[name] = {"var_sys": var_sys, "var_anc": var_anc}
 

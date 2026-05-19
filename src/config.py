@@ -38,12 +38,16 @@ class Config:
         self.N_reps_each_init_plateau: int = 1
 
         # If not common_initial_plateaus:
-        self.N_reps_if_from_scratch: int = 1
+        self.N_reps_if_from_scratch: int = 20
 
         # -- Training mode ----------------------------
         # use_choi: True = Choi representation, False = Haar random batching
         self.use_choi: bool = False
-        self.batch_size: int = 50  # Only for Haar random 
+        self.batch_size: int = 10  # Only for Haar/Comp random 
+        self.batch_mode: Literal["haar", "comp"] = "haar"
+
+        self.eval_batch_size = 20
+        self.eval_seed = 1234   
 
         # Configurations to compare (each dict overrides CFG attributes):
         self.reps_new_config: list[dict[str, Any]] = [
@@ -55,6 +59,7 @@ class Config:
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
                 "ancilla_coupling_layers": "all",
+                "ancilla_training": True
             },
             {
                 "extra_ancilla": True,
@@ -64,6 +69,7 @@ class Config:
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
                 "ancilla_coupling_layers": "all",
+                "ancilla_training": True
             },
             {
                 "extra_ancilla": True,
@@ -73,6 +79,7 @@ class Config:
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
                 "ancilla_coupling_layers": "all",
+                "ancilla_training": True
             },
             {
                 "extra_ancilla": True,
@@ -82,28 +89,20 @@ class Config:
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
                 "ancilla_coupling_layers": "all",
+                "ancilla_training": True
             },
-            # {   
-            #     "extra_ancilla": True,
-            #     "ancilla_mode": "pass",
-            #     "ancilla_topology": "bridge",
-            #     "ancilla_connect_to": None,
-            #     "do_ancilla_1q_gates": True,
-            #     "start_ancilla_gates_randomly": True,
-            #     "ancilla_coupling_layers": [1], # 2nd layer
-            # },
         ]
 
         # -- Loading and warm start ----------------------------
         # Load a previous run by timestamp. Supports \pm 1 qubit (ancilla add/remove).
-        self.load_timestamp: Optional[str] = None  # -- "" <------------
+        self.load_timestamp: Optional[str] = None # -- "" <------------
         self.type_of_warm_start: Literal["none", "all", "some"] = "none"
         self.warm_start_strength: Optional[float] = 0.1
 
         # -- Training ------------------------------------------
         self.epochs: int = 10
         self.iterations_epoch: int = 300
-        self.save_fid_and_loss_every_x_iter: int = 1
+        self.save_fid_and_loss_every_x_iter: int = 10
         self.log_every_x_iter: int = 10  # Must be a multiple of save_fid_and_loss_every_x_iter
         self.max_fidelity: float = 0.99  # Stop button
         # In GANs, we can choose that the Discriminador learn faster than the Generator, or vice versa.
@@ -135,6 +134,9 @@ class Config:
         self.start_ancilla_gates_randomly: bool = True
         # If all layer have 1q and 2q coupling gates or not
         self.ancilla_coupling_layers: Literal["all"] | list[int] = "all"
+        # If False, ancilla params are randomly initialised but FROZEN,
+        # autograd does not propagate the losvs
+        self.ancilla_training: bool = True
 
         # -- Generator ansatz ----------------------------
         #
@@ -146,8 +148,8 @@ class Config:
         #
         # Custom: specify gate order in custom_ansatz_terms.
         #   Available: "X", "Y", "Z", "XX", "YY", "ZZ"
-        self.gen_ansatz: Literal["ZZ_YY_XX_Z", "ZZ_Z_X", "custom"] = "ZZ_YY_XX_Z"
-        self.custom_ansatz_terms: Optional[list[str]] = ["ZZ", "XX", "Y", "X"]
+        self.gen_ansatz: Literal["ZZ_YY_XX_Z", "ZZ_Z_X", "custom"] = "ZZ_Z_X"
+        self.custom_ansatz_terms: Optional[list[str]] = ["ZZ", "XX", "YY", "Z"]
 
         # -- Target Hamiltonian ----------------------------
         #
@@ -156,9 +158,8 @@ class Config:
         #   Available: I, X, Y, Z, XX, XZ, ZZ, ZZZ, ZZZZ, XZX, XXXX
         self.time_to_evolve: float = 1.0  # Time to evolve with the Hamiltonian, for the target state preparation.
         self.target_hamiltonian: Literal["cluster_h", "rotated_surface_h", "ising_h", "custom_h"] = "custom_h"
-        self.custom_hamiltonian_terms: Optional[list[str]] = ["XXX","ZZZ"]
-        self.custom_hamiltonian_strengths: Optional[list[float]] = [1.0,0.4]
-
+        self.custom_hamiltonian_terms: Optional[list[str]] = ["ZZZ"]
+        self.custom_hamiltonian_strengths: Optional[list[float]] = [1.0]
         # -- Optimiser --------------------------------------
         self.l_rate: float = 0.01
         self.momentum_coeff: float = 0.9
@@ -200,6 +201,7 @@ class Config:
             f"{sep}\n"
             f"use_choi: {self.use_choi}\n"
             f"batch_size: {self.batch_size}\n"
+            f"batch_mode:{self.batch_mode}\n"
             f"{sep}\n"
             f"load_timestamp: {self.load_timestamp}\n"
             f"type_of_warm_start: {self.type_of_warm_start}\n"
@@ -214,6 +216,7 @@ class Config:
             f"do_ancilla_1q_gates: {self.do_ancilla_1q_gates}\n"
             f"start_ancilla_gates_randomly: {self.start_ancilla_gates_randomly}\n"
             f"ancilla_coupling_layers: {self.ancilla_coupling_layers}\n"
+            f"ancilla_training: {self.ancilla_training}\n"
             f"{sep}\n"
             f"gen_layers: {self.gen_layers}\n"
             f"gen_ansatz: {self.gen_ansatz}\n"

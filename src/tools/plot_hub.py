@@ -24,6 +24,7 @@ from tools.data_managers import print_and_log
 mpl.use("Agg")
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
+import csv
 
 
 ########################################################################
@@ -64,6 +65,16 @@ def generate_all_plots(
     plot_grad_joined_mean(base_path, log_path, n_runs,
                              common_initial_plateaus=common_initial_plateaus,
                              run_names=run_names)
+    # Gradient norm and abs mean trajectory plots
+    plot_grad_norm_trajectory(base_path, log_path, n_runs,
+                              common_initial_plateaus=common_initial_plateaus,
+                              run_names=run_names)
+    plot_grad_norm_joined_all(base_path, log_path, n_runs,
+                              common_initial_plateaus=common_initial_plateaus,
+                              run_names=run_names)
+    plot_grad_norm_joined_mean(base_path, log_path, n_runs,
+                               common_initial_plateaus=common_initial_plateaus,
+                               run_names=run_names)
 
 ########################################################################
 # REAL TIME RUN PLOTTING FUNCTION
@@ -1921,3 +1932,621 @@ def plot_grad_trajectory_by_plateau(base_path, log_path, n_runs, plateau_ids,
             fig.savefig(save_path, dpi=120)
             print_and_log(f"Saved plot to {save_path}", log_path)
             plt.close(fig)
+
+
+# -- GRADIENT NORM PLOTS --------------------------------------------
+def _grad_norm_and_mean(grad_path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load grad_history.npy and return"""
+    G = np.load(grad_path)                          # shape (T, n_params)
+    norm = np.sqrt(np.sum(G ** 2, axis=1))          
+    abs_mean = np.abs(np.mean(G, axis=1))           
+    return norm, abs_mean
+
+
+def plot_grad_norm_trajectory(base_path, log_path, n_runs,
+                               common_initial_plateaus=False, run_names=None):
+    """Per-run detail plot: one figure per run, all repetitions overlaid.
+
+    Each repetition contributes two curves:
+        - ||nabla C||^2 across all params at each iteration (solid)
+        - |<partial C/partial theta>| across all params at each iteration (dotted)
+    Fidelity is overlaid on the right axis (dashed, thinner).
+    """
+    runs = _find_grad_runs(base_path, n_runs, common_initial_plateaus)
+
+    for run_idx, entries in runs.items():
+        if not entries:
+            continue
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax_f = ax.twinx()
+        cmap = plt.cm.tab10
+
+        for rep_i, (label, grad_path, run_dir) in enumerate(entries):
+            norm, abs_mean = _grad_norm_and_mean(grad_path)
+            color = cmap(rep_i % 10)
+            ax.plot(np.arange(norm.size), norm,
+                    color=color, linewidth=1.3, alpha=0.85,
+                    label=f"{label} ‖∇C‖")
+            ax.plot(np.arange(abs_mean.size), abs_mean,
+                    color=color, linewidth=1.0, alpha=0.7,
+                    linestyle=":", label=f"{label} |⟨∂C⟩|")
+            # Fidelity overlay (right axis)
+            fids = _load_fidelity_curve(run_dir)
+            if fids is not None:
+                ax_f.plot(np.arange(fids.size), fids,
+                          color=color, linewidth=0.8, alpha=0.5,
+                          linestyle="--", label=f"{label} (Fid)")
+
+        ax.set_yscale("log")
+        ax.set_xlabel("training iteration")
+        ax.set_ylabel(r"$\|\nabla C\|_2$ (solid),   $|\langle\partial C/\partial\theta\rangle|$ (dotted)")
+        ax_f.set_ylabel("Fidelity")
+        ax_f.set_ylim(0, 1.02)
+        run_label = _base_label_for_run(run_idx, run_names)
+        ax.set_title(f"Gradient norm & mean — {run_label}")
+        ax.grid(alpha=0.3)
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax_f.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, fontsize=7, ncol=2, loc="best")
+
+        fig.tight_layout()
+        save_path = os.path.join(base_path, f"grad_norm_trajectory_run{run_idx}.png")
+        fig.savefig(save_path, dpi=120)
+        print_and_log(f"Saved plot to {save_path}", log_path)
+        plt.close(fig)
+
+
+def _build_joined_norm_trajectory(phase1_path: str, phase2_path: str
+                                   ) -> tuple[np.ndarray, np.ndarray]:
+    """Concatenate Initial Plateau and Changed Run into one (norm, abs_mean) pair.
+
+    Param count may differ between phases (ancilla added). Both metrics are
+    computed independently per phase so this is well-defined.
+    """
+    n1, m1 = _grad_norm_and_mean(phase1_path)
+    n2, m2 = _grad_norm_and_mean(phase2_path)
+    return np.concatenate([n1, n2]), np.concatenate([m1, m2])
+
+
+def _collect_joined_norm_per_config(base_path: str, n_runs: int):
+    """Build joined (norm, abs_mean) trajectories per config.
+
+    Returns:
+        joined: dict[str, list[tuple[np.ndarray, np.ndarray]]]
+                label -> list of (norm_curve, abs_mean_curve)
+        insert_iter: int or None — iteration index where Changed Run starts.
+    """
+    plateau_grads = _find_initial_plateau_grads(base_path)
+    if not plateau_grads:
+        return {}, None
+
+    joined: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {}
+
+    # Control
+    ctrl = _find_control_grads_by_plateau(base_path)
+    ctrl_curves = []
+    for pid, paths in ctrl.items():
+        if pid not in plateau_grads:
+            continue
+        for p2 in paths:
+            ctrl_curves.append(_build_joined_norm_trajectory(plateau_grads[pid], p2))
+    if ctrl_curves:
+        joined["Control"] = ctrl_curves
+
+    # Each changed run
+    for run_idx in range(1, n_runs + 1):
+        run_paths = _find_changed_grads_by_plateau(base_path, run_idx)
+        run_curves = []
+        for pid, paths in run_paths.items():
+            if pid not in plateau_grads:
+                continue
+            for p2 in paths:
+                run_curves.append(_build_joined_norm_trajectory(plateau_grads[pid], p2))
+        if run_curves:
+            joined[f"Run {run_idx}"] = run_curves
+
+    any_p1 = next(iter(plateau_grads.values()))
+    insert_iter = np.load(any_p1).shape[0]
+    return joined, insert_iter
+
+
+def plot_grad_norm_joined_all(base_path, log_path, n_runs,
+                               common_initial_plateaus=False, run_names=None):
+    """Plot A: every joined trajectory as a thin transparent line.
+
+    Two panels stacked: top = ||nabla C||^2, bottom = |<partial C/partial theta>|.
+    """
+    if not common_initial_plateaus:
+        return
+    joined, insert_iter = _collect_joined_norm_per_config(base_path, n_runs)
+    if not joined:
+        return
+
+    fig, (ax_n, ax_m) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    cmap = plt.cm.tab10
+    colors: dict[str, tuple] = {}
+    color_idx = 0
+    for label in joined.keys():
+        if label.startswith("Run "):
+            run_idx = int(label.split()[1])
+            display = _base_label_for_run(run_idx, run_names)
+        else:
+            display = label
+        colors[label] = (cmap(color_idx % 10), display)
+        color_idx += 1
+
+    for label, curves in joined.items():
+        color, display = colors[label]
+        for i, (norm, abs_mean) in enumerate(curves):
+            ax_n.plot(np.arange(norm.size), norm, color=color,
+                      linewidth=0.6, alpha=0.3,
+                      label=display if i == 0 else None)
+            ax_m.plot(np.arange(abs_mean.size), abs_mean, color=color,
+                      linewidth=0.6, alpha=0.3,
+                      label=display if i == 0 else None)
+
+    if insert_iter is not None:
+        for ax in (ax_n, ax_m):
+            ax.axvline(insert_iter, color="black", linestyle=":",
+                       linewidth=1.2, alpha=0.7,
+                       label=f"Ancilla insertion (iter {insert_iter})")
+
+    for ax in (ax_n, ax_m):
+        ax.set_yscale("log")
+        ax.grid(alpha=0.3)
+    ax_n.set_ylabel(r"$\|\nabla C\|_2$")
+    ax_m.set_ylabel(r"$|\langle \partial C/\partial \theta \rangle|$")
+    ax_m.set_xlabel("training iteration (Initial Plateau + Changed Run)")
+    ax_n.set_title("Gradient norm — all joined trajectories")
+    ax_n.legend(fontsize=8, loc="best")
+
+    fig.tight_layout()
+    save_path = os.path.join(base_path, "grad_norm_joined_all.png")
+    fig.savefig(save_path, dpi=120)
+    print_and_log(f"Saved plot to {save_path}", log_path)
+    plt.close(fig)
+
+
+def plot_grad_norm_joined_mean(base_path, log_path, n_runs,
+                                common_initial_plateaus=False, run_names=None):
+    """Plot B: mean joined trajectory per config, with NaN-padding for early-exit reps.
+
+    Two panels stacked: top = ||nabla C||^2 (mean over reps), bottom = |<partial C/partial theta>|.
+    Plus a zoomed view around the insertion point and an n_active subplot.
+    """
+    if not common_initial_plateaus:
+        return
+    joined, insert_iter = _collect_joined_norm_per_config(base_path, n_runs)
+    if not joined:
+        return
+
+    fig, (ax_n, ax_m) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    cmap = plt.cm.tab10
+    color_idx = 0
+    mean_curves: dict[str, tuple] = {}  # label -> (mean_norm, mean_mean, n_active, color, display)
+
+    for label, curves in joined.items():
+        max_T = max(c[0].size for c in curves)
+        N = np.full((len(curves), max_T), np.nan)
+        M = np.full((len(curves), max_T), np.nan)
+        for i, (norm, abs_mean) in enumerate(curves):
+            N[i, :norm.size] = norm
+            M[i, :abs_mean.size] = abs_mean
+
+        mean_n = np.nanmean(N, axis=0)
+        mean_m = np.nanmean(M, axis=0)
+        n_active = np.sum(~np.isnan(N), axis=0)
+
+        if label.startswith("Run "):
+            run_idx = int(label.split()[1])
+            display = _base_label_for_run(run_idx, run_names)
+        else:
+            display = label
+        color = cmap(color_idx % 10)
+        color_idx += 1
+
+        ax_n.plot(np.arange(max_T), mean_n, color=color, linewidth=2.0,
+                  label=f"{display} — mean (n={N.shape[0]})")
+        ax_m.plot(np.arange(max_T), mean_m, color=color, linewidth=2.0,
+                  label=f"{display} — mean (n={M.shape[0]})")
+        mean_curves[label] = (mean_n, mean_m, n_active, color, display)
+
+    if insert_iter is not None:
+        for ax in (ax_n, ax_m):
+            ax.axvline(insert_iter, color="black", linestyle=":",
+                       linewidth=1.2, alpha=0.7,
+                       label=f"Ancilla insertion (iter {insert_iter})")
+
+    for ax in (ax_n, ax_m):
+        ax.set_yscale("log")
+        ax.grid(alpha=0.3)
+    ax_n.set_ylabel(r"$\|\nabla C\|_2$  (mean over reps)")
+    ax_m.set_ylabel(r"$|\langle \partial C/\partial \theta \rangle|$  (mean over reps)")
+    ax_m.set_xlabel("training iteration (Initial Plateau + Changed Run)")
+    ax_n.set_title("Gradient norm — mean joined trajectory per config")
+    ax_n.legend(fontsize=9, loc="best")
+
+    fig.tight_layout()
+    save_path = os.path.join(base_path, "grad_norm_joined_mean.png")
+    fig.savefig(save_path, dpi=120)
+    print_and_log(f"Saved plot to {save_path}", log_path)
+    plt.close(fig)
+
+    # -- Zoom around insertion ---------------------------------------------
+    if insert_iter is None:
+        return
+    ZOOM = 100
+    fig2, (ax2_n, ax2_m) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+    zoom_end_default = insert_iter + ZOOM
+    start = max(0, insert_iter - 10)
+    for label, (mean_n, mean_m, _, color, display) in mean_curves.items():
+        end_n = min(zoom_end_default, mean_n.size)
+        end_m = min(zoom_end_default, mean_m.size)
+        ax2_n.plot(np.arange(start, end_n), mean_n[start:end_n],
+                   color=color, linewidth=2.0, label=f"{display} — mean")
+        ax2_m.plot(np.arange(start, end_m), mean_m[start:end_m],
+                   color=color, linewidth=2.0, label=f"{display} — mean")
+    for ax in (ax2_n, ax2_m):
+        ax.axvline(insert_iter, color="black", linestyle=":",
+                   linewidth=1.2, alpha=0.7,
+                   label=f"Ancilla insertion (iter {insert_iter})")
+        ax.set_yscale("log")
+        ax.grid(alpha=0.3)
+    ax2_n.set_ylabel(r"$\|\nabla C\|_2$")
+    ax2_m.set_ylabel(r"$|\langle \partial C/\partial \theta \rangle|$")
+    ax2_m.set_xlabel("training iteration")
+    ax2_n.set_title(f"Zoom: {ZOOM} iterations after ancilla insertion")
+    ax2_n.legend(fontsize=8, loc="best", ncol=2)
+    fig2.tight_layout()
+    save_path2 = os.path.join(base_path, "grad_norm_joined_mean_zoom.png")
+    fig2.savefig(save_path2, dpi=120)
+    print_and_log(f"Saved plot to {save_path2}", log_path)
+    plt.close(fig2)
+
+
+def plot_grad_norm_trajectory_by_plateau(base_path, log_path, n_runs, plateau_ids,
+                                           run_names=None, include_control=True,
+                                           include_initial=True):
+    """Per-plateau detail plot: one figure per (plateau, run), all reps overlaid.
+
+    For each plateau in `plateau_ids`, generates one figure per run (and optionally
+    control). Each figure shows ||nabla C||^2 (solid) and |<partial C/partial theta>| (dotted) on the left
+    log axis, plus fidelity (dashed) on the right axis, for every repetition.
+    Mirror of plot_grad_trajectory_by_plateau but for the gradient norm.
+    """
+    if isinstance(plateau_ids, int):
+        plateau_ids = [plateau_ids]
+
+    plateau_grads = _find_initial_plateau_grads(base_path)
+
+    for pid in plateau_ids:
+        if pid not in plateau_grads:
+            print_and_log(f"[grad_norm_by_plateau] plateau {pid} not found, skipping", log_path)
+            continue
+
+        init_grad_path = plateau_grads[pid]
+        init_run_dir = os.path.dirname(init_grad_path)
+
+        configs: list[tuple[str, list[str]]] = []
+        if include_control:
+            ctrl = _find_control_grads_by_plateau(base_path).get(pid, [])
+            ctrl_dirs = [os.path.dirname(p) for p in ctrl]
+            if ctrl_dirs:
+                configs.append(("Control", ctrl_dirs))
+        for run_idx in range(1, n_runs + 1):
+            run_paths = _find_changed_grads_by_plateau(base_path, run_idx).get(pid, [])
+            run_dirs = [os.path.dirname(p) for p in run_paths]
+            if run_dirs:
+                label = _base_label_for_run(run_idx, run_names)
+                configs.append((label, run_dirs))
+
+        if not configs:
+            continue
+
+        for cfg_label, rep_dirs in configs:
+            fig, ax = plt.subplots(figsize=(9, 5))
+            ax_f = ax.twinx()
+            cmap = plt.cm.tab10
+
+            for rep_i, rep_dir in enumerate(rep_dirs):
+                color = cmap(rep_i % 10)
+                # -- norm + abs mean for this rep --
+                rep_grad_path = os.path.join(rep_dir, "grad_history.npy")
+                n_rep, m_rep = _grad_norm_and_mean(rep_grad_path)
+                if include_initial:
+                    n_init, m_init = _grad_norm_and_mean(init_grad_path)
+                    norm_curve = np.concatenate([n_init, n_rep])
+                    mean_curve = np.concatenate([m_init, m_rep])
+                else:
+                    norm_curve = n_rep
+                    mean_curve = m_rep
+                ax.plot(np.arange(norm_curve.size), norm_curve,
+                        color=color, linewidth=1.3, alpha=0.85,
+                        label=f"rep{rep_i} ‖∇C‖")
+                ax.plot(np.arange(mean_curve.size), mean_curve,
+                        color=color, linewidth=1.0, alpha=0.7,
+                        linestyle=":", label=f"rep{rep_i} |⟨∂C⟩|")
+
+                # -- fidelity --
+                f_rep = _load_fidelity_curve(rep_dir)
+                if include_initial:
+                    f_init = _load_fidelity_curve(init_run_dir)
+                    parts = [x for x in (f_init, f_rep) if x is not None]
+                    fid_curve = np.concatenate(parts) if parts else None
+                else:
+                    fid_curve = f_rep
+                if fid_curve is not None:
+                    ax_f.plot(np.arange(fid_curve.size), fid_curve,
+                              color=color, linewidth=0.8, alpha=0.5,
+                              linestyle="--", label=f"rep{rep_i} (Fid)")
+
+            if include_initial:
+                insert_iter = np.load(init_grad_path).shape[0]
+                ax.axvline(insert_iter, color="black", linestyle=":",
+                           linewidth=1.2, alpha=0.7,
+                           label=f"Ancilla insertion (iter {insert_iter})")
+
+            ax.set_yscale("log")
+            ax.set_xlabel("training iteration")
+            ax.set_ylabel(r"$\|\nabla C\|_2$ (solid),   $|\langle\partial C\rangle|$ (dotted)")
+            ax_f.set_ylabel("Fidelity")
+            ax_f.set_ylim(0, 1.02)
+            ax.set_title(f"Plateau {pid} — {cfg_label}")
+            ax.grid(alpha=0.3)
+            h1, l1 = ax.get_legend_handles_labels()
+            h2, l2 = ax_f.get_legend_handles_labels()
+            ax.legend(h1 + h2, l1 + l2, fontsize=7, ncol=2, loc="best")
+            fig.tight_layout()
+
+            safe_label = re.sub(r"[^A-Za-z0-9_\-]+", "_", cfg_label)
+            save_path = os.path.join(
+                base_path, f"grad_norm_trajectory_plateau{pid}_{safe_label}.png"
+            )
+            fig.savefig(save_path, dpi=120)
+            print_and_log(f"Saved plot to {save_path}", log_path)
+            plt.close(fig)
+
+# ============================================================================
+# DECILE-GROUPED SCATTER PLOTS (for decile_training_crn.py output)
+# ============================================================================
+# These plots are tailored to the decile_training output, where the on-disk
+# layout is experiment<N>/<rep>/fidelities/... but the natural axis is
+# (config, decile_ref): we want one scatter column per config, one figure per
+# decile, with all N_PER_CELL seeds as a cloud inside each column.
+#
+# The manifest.csv produced by decile_training_crn.py has the mapping we need
+# (config, decile_ref, rep, seed_id, load_timestamp), so we read it and walk
+# the experiment<N> folders in the SAME order the script wrote them.
+# ============================================================================
+
+def _load_decile_manifest(manifest_path: str) -> list[dict]:
+    """Load the manifest.csv into a list of row-dicts.
+
+    Returns rows in the SAME order as written by decile_training_crn.py,
+    which is also the order experiment<N> directories were created.
+    The cell index in that order is experiment<i+1>/<rep>/.
+    """
+    rows: list[dict] = []
+    with open(manifest_path, "r", newline="") as f:
+        for r in csv.DictReader(f):
+            rows.append(r)
+    return rows
+
+
+def _find_decile_manifest(base_path: str) -> str | None:
+    """Locate the manifest.csv for a decile_training run.
+
+    base_path is something like `generated_data/decile_training/<VTS>`.
+    The manifest lives at `generated_data/decile_seeds/<VTS>/manifest.csv`
+    (sibling tree, same <VTS>). We try the sibling first, then a
+    fallback inside base_path in case the layout changes.
+    """
+    norm = os.path.normpath(base_path)
+    parts = norm.split(os.sep)
+    # Replace the last occurrence of 'decile_training' with 'decile_seeds'.
+    try:
+        idx = len(parts) - 1 - parts[::-1].index("decile_training")
+        sibling_parts = parts.copy()
+        sibling_parts[idx] = "decile_seeds"
+        sibling = os.sep.join(sibling_parts)
+        cand = os.path.join(sibling, "manifest.csv")
+        if os.path.exists(cand):
+            return cand
+    except ValueError:
+        pass
+    # Fallback: directly inside base_path
+    cand2 = os.path.join(base_path, "manifest.csv")
+    return cand2 if os.path.exists(cand2) else None
+
+
+def scatter_plot_by_decile(
+    base_path: str,
+    log_path: str,
+    max_fidelity: float,
+    manifest_path: str | None = None,
+    configs_order: list[str] | None = None,
+    config_display: dict | None = None,
+):
+    """Per-decile scatter: one figure per decile_ref, one column per config.
+
+    For each decile_ref D in the manifest, draws a `scatter_plot`-style figure
+    where the X axis is the four configs (no_ancilla, ancilla_total,
+    ancilla_bridge, ancilla_shortBridge), and each column shows the cloud of
+    N_PER_CELL seeds for that (config, D).
+
+    Saves figures as `<base_path>/scatter_plot_D<dd>.png`.
+
+    Args:
+        base_path: path to `generated_data/decile_training/<VTS>`.
+        log_path: where to print log messages.
+        max_fidelity: success threshold (same semantics as scatter_plot).
+        manifest_path: optional explicit path to manifest.csv. If None, auto-
+            discovered from base_path.
+        configs_order: optional list giving the X-axis order of configs.
+            Default: ["no_ancilla", "ancilla_total", "ancilla_bridge",
+            "ancilla_shortBridge"].
+        config_display: optional {config_name: display_label} for prettier
+            tick labels.
+    """
+    if manifest_path is None:
+        manifest_path = _find_decile_manifest(base_path)
+    if manifest_path is None or not os.path.exists(manifest_path):
+        print_and_log(
+            f"[scatter_by_decile] manifest.csv not found near {base_path}",
+            log_path,
+        )
+        return
+
+    rows = _load_decile_manifest(manifest_path)
+    if not rows:
+        print_and_log("[scatter_by_decile] manifest is empty", log_path)
+        return
+
+    if configs_order is None:
+        configs_order = [
+            "no_ancilla", "ancilla_total",
+            "ancilla_bridge", "ancilla_shortBridge",
+        ]
+    if config_display is None:
+        config_display = {
+            "no_ancilla":          "no_ancilla",
+            "ancilla_total":       "total",
+            "ancilla_bridge":      "bridge",
+            "ancilla_shortBridge": "shortBridge",
+        }
+
+    # Build {(config, decile): [(fid, status, rep), ...]} by walking rows.
+    # The i-th row (0-indexed) corresponds to experiment<i+1>/<rep>/.
+    by_cell: dict[tuple[str, int], list[float]] = {}
+    for i, r in enumerate(rows):
+        cfg = r["config"]
+        try:
+            decile = int(r["decile_ref"])
+            rep = int(r["rep"])
+        except (KeyError, ValueError):
+            continue
+        if r.get("status") != "ok":
+            continue
+        cell_idx = i + 1
+        fid_path = os.path.join(
+            base_path, f"experiment{cell_idx}", str(rep),
+            "fidelities", "log_fidelity_loss.txt",
+        )
+        v = get_max_fidelity_from_file(fid_path)
+        if v is None:
+            continue
+        by_cell.setdefault((cfg, decile), []).append(v)
+
+    if not by_cell:
+        print_and_log(
+            "[scatter_by_decile] no fidelity data found under "
+            f"{base_path} for any manifest row",
+            log_path,
+        )
+        return
+
+    # One figure per decile
+    deciles = sorted({d for (_c, d) in by_cell.keys()})
+    for decile in deciles:
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        ax2 = ax1.twinx()
+        ax1.axhline(
+            100 * max_fidelity, color="C0", linestyle="--",
+            label=f"max_fidelity={max_fidelity}",
+        )
+
+        x_ticks: list[int] = []
+        base_labels: list[str] = []
+        tries_counts: list[int] = []
+
+        for col_x, cfg in enumerate(configs_order, start=1):
+            vals = by_cell.get((cfg, decile), [])
+            tries = len(vals)
+
+            # Cloud of seeds (gray)
+            if vals:
+                xs = _make_jittered_xs(col_x, len(vals))
+                ax1.scatter(
+                    xs, [v * 100 for v in vals],
+                    color="gray", alpha=0.4, s=18, zorder=3,
+                )
+
+            avg_f = (float(np.nanmean(vals)) * 100.0) if vals else 0.0
+            avg_s = (100.0 * np.sum(np.array(vals) >= max_fidelity) / tries) \
+                if tries > 0 else 0.0
+            std_f = (float(np.nanstd(vals)) * 100.0) \
+                if vals and len(vals) > 1 else 0.0
+
+            # Avg fidelity (green circle, with error bar)
+            ax2.errorbar(
+                [col_x], [avg_f], yerr=[std_f],
+                fmt="o", color="green", ecolor="green",
+                markeredgecolor="black", markersize=8,
+                elinewidth=1.5, capsize=4, zorder=3,
+            )
+            ax2.scatter(
+                [col_x], [avg_f], color="green",
+                edgecolors="black", linewidths=0.5, s=60, zorder=3,
+            )
+            # Success rate (red diamond)
+            ax2.scatter(
+                [col_x], [avg_s], color="red", marker="D", s=50, zorder=3,
+            )
+            # Value tags
+            t1 = ax2.text(
+                col_x + 0.07, avg_f, f"{avg_f:.1f}%",
+                ha="left", va="center", fontsize=10, color="green",
+            )
+            t1.set_path_effects([pe.withStroke(linewidth=3, foreground="white")])
+            t2 = ax2.text(
+                col_x + 0.07, avg_s, f"{avg_s:.1f}%",
+                ha="left", va="center", fontsize=10, color="red",
+            )
+            t2.set_path_effects([pe.withStroke(linewidth=3, foreground="white")])
+
+            x_ticks.append(col_x)
+            base_labels.append(config_display.get(cfg, cfg))
+            tries_counts.append(tries)
+
+        ax1.set_ylabel("Best Fidelity Achieved in each Seed (%)")
+        ax2.set_ylabel("Average/Success Rate of each Config (%)")
+        ax1.set_xlabel(f"config  (decile {decile} of no_ancilla)", labelpad=18)
+        ax1.set_xticks(x_ticks)
+        ax1.set_xticklabels(base_labels)
+        _draw_tries_sublabels(ax1, x_ticks, tries_counts, fontsize=8)
+        fig.subplots_adjust(bottom=0.24)
+        ax1.set_ylim(0, 105)
+        ax2.set_ylim(0, 105)
+        ax1.grid(True, alpha=0.3)
+
+        handles = [
+            plt.Line2D(
+                [0], [0], color="C0", linestyle="--",
+                label=f"Max fidelity ({int(max_fidelity * 100)}%)",
+            ),
+            plt.Line2D(
+                [0], [0], marker="o", color="w", markerfacecolor="gray",
+                alpha=0.4, markersize=6, linestyle="None",
+                label="Seed Best Fidelity (%)",
+            ),
+            plt.Line2D(
+                [0], [0], marker="o", color="w", markerfacecolor="green",
+                markeredgecolor="black", markersize=7, linestyle="None",
+                label="Config Avg Best Fidelity (%)",
+            ),
+            plt.Line2D(
+                [0], [0], marker="D", color="w", markerfacecolor="red",
+                markersize=7, linestyle="None",
+                label="Config Success Rate (%)",
+            ),
+        ]
+        ax1.legend(handles=handles, loc="best")
+        ax1.set_title(
+            f"Decile {decile} of no_ancilla ||g||² — same seeds across configs"
+        )
+
+        save_path = os.path.join(base_path, f"scatter_plot_D{decile:02d}.png")
+        fig.tight_layout()
+        fig.savefig(save_path)
+        print_and_log(f"Saved plot to {save_path}", log_path)
+        plt.close(fig)

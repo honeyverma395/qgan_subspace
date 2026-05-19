@@ -21,6 +21,8 @@ get_final_gen_state_for_discriminator(state)           -> final_state
 
 import numpy as np
 import torch
+import pennylane as qml
+import torch
 
 from config import CFG
 
@@ -78,6 +80,34 @@ def haar_random_batch(dim: int, batch_size: int) -> list[torch.Tensor]:
         batch_inputs.append(torch.kron(v, ancilla_zero) if CFG.extra_ancilla else v)
     return batch_raw, batch_inputs
 
+def comp_random_batch(dim: int, batch_size: int) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """Generate a batch of computational basis states |k>, k uniform in [0, dim).
+    (Find some way to avoid repetition)
+    Same return signature as haar_random_batch:
+        - batch_raw   : states without ancilla (dim,)
+        - batch_inputs: with |0> kron'd in if CFG.extra_ancilla (2*dim,)
+
+    Returns:
+        (batch_raw, batch_inputs)
+    """
+    ancilla_zero = torch.tensor([1.0, 0.0], dtype=torch.complex64)
+    batch_raw = []
+    batch_inputs = []
+    for _ in range(batch_size):
+        k = int(np.random.randint(0, dim))
+        v = torch.zeros(dim, dtype=torch.complex64)
+        v[k] = 1.0
+        batch_raw.append(v)
+        batch_inputs.append(torch.kron(v, ancilla_zero) if CFG.extra_ancilla else v)
+    return batch_raw, batch_inputs
+
+def get_random_batch(dim: int, batch_size: int) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """Dispatch to the input-state sampler selected by CFG.batch_mode."""
+    if CFG.batch_mode == "haar":
+        return haar_random_batch(dim, batch_size)
+    if CFG.batch_mode == "comp":
+        return comp_random_batch(dim, batch_size)
+    raise ValueError(f"Unknown batch_mode: {CFG.batch_mode}")
 
 def prepare_batch_targets(
     batch_raw: list[torch.Tensor],
@@ -146,7 +176,6 @@ def _trace_out_ancilla(state: torch.Tensor) -> torch.Tensor:
 
     This operation involves eigendecomposition + stochastic sampling,
     which breaks differentiability. Same limitation as the original numpy version.
-    (Ask Guille if is legal or we can do it better)
 
     Args:
         state: Statevector as a 1D torch tensor, shape (2^N,).
@@ -206,3 +235,35 @@ def get_final_gen_state_torch(total_output_state: torch.Tensor) -> torch.Tensor:
         return _trace_out_ancilla(total_output_state)
 
     raise ValueError(f"Unknown ancilla_mode: {CFG.ancilla_mode}")
+
+def extract_gen_unitary(gen) -> torch.Tensor:
+    """Extract U_gen as a (D, D) torch tensor using qml.matrix.
+
+    D = 2^(system_size + 1) if ancilla is present and ancilla_mode == "pass",
+    otherwise D = 2^system_size.
+
+    Only meaningful when the post-ancilla map is linear (i.e. ancilla_mode == "pass"
+    or no ancilla). For "project"/"trace" the generator is not a unitary.
+    """
+    from qgan.generator import Ansatz, _wire_layout
+
+    _, gen_wires, ancilla_wire, total_wires = _wire_layout()
+
+    def ansatz_only(params):
+        Ansatz.apply(params, gen_wires, ancilla_wire)
+
+    with torch.no_grad():
+        U = qml.matrix(ansatz_only, wire_order=list(range(total_wires)))(
+            gen._effective_params()
+        )
+    return U.to(torch.complex64)
+
+
+def process_fidelity(U_gen: torch.Tensor, U_target: torch.Tensor) -> float:
+    """F_proc = |Tr(U_target^† U_gen)|^2 / d^2.
+
+    ⟨U_target | U_gen⟩_HS normalised. Equals the Choi-state fidelity.
+    """
+    d = U_target.shape[0]
+    tr = torch.trace(U_target.conj().T @ U_gen)
+    return (tr.abs() ** 2 / d ** 2).item()

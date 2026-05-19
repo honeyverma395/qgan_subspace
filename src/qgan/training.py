@@ -30,8 +30,10 @@ from config import CFG
 from qgan.ancilla import (
     get_final_gen_state_torch,
     get_max_entangled_state_with_ancilla_if_needed,
-    haar_random_batch,
+    get_random_batch,
     prepare_batch_targets,
+    extract_gen_unitary, 
+    process_fidelity
 )
 from qgan.cost_functions import compute_fidelity_and_cost
 from qgan.discriminator import Discriminator
@@ -79,6 +81,32 @@ class Training:
         # Discriminator: classical Hermitian operator
         self.dis: Discriminator = Discriminator()
 
+        # -- Eval batch (batching only) ----------------------
+        # Fixed evaluation set: generated once with a fixed seed so that
+        # the fidelity curve reflects generalisation, not the luck of the
+        # current training batch. Same set is reused across iters and runs.
+        if not CFG.use_choi:
+            dim = 2**CFG.system_size
+            self.eval_batch_size = CFG.eval_batch_size
+            eval_seed = getattr(CFG, "eval_seed", 1234)
+
+            # Snapshot + restore RNG state so eval-set generation does not
+            # perturb the training RNG stream.
+            torch_state = torch.random.get_rng_state()
+            np_state = np.random.get_state()
+            torch.manual_seed(eval_seed)
+            np.random.seed(eval_seed)
+            try:
+                self.eval_raw, self.eval_inputs = get_random_batch(
+                    dim, self.eval_batch_size
+                )
+                self.eval_targets = prepare_batch_targets(
+                    self.eval_raw, self.eval_inputs, self.target_op
+                )
+            finally:
+                torch.random.set_rng_state(torch_state)
+                np.random.set_state(np_state)
+
     def run(self):
         """Run the training loop.
 
@@ -120,8 +148,15 @@ class Training:
                 else:
                     self._train_step_batch(epoch_iter, fidelities, losses)
 
+                # -- Evaluation on fixed set --
+                if epoch_iter % CFG.save_fid_and_loss_every_x_iter == 0:
+                    if CFG.use_choi:
+                        self._evaluate_choi(fidelities, losses)
+                    else:
+                        self._evaluate_batch(fidelities, losses)
+
                 # -- Log
-                if epoch_iter % CFG.log_every_x_iter == 0:
+                if epoch_iter % CFG.log_every_x_iter == 0 and fidelities:
                     info = (
                         f"\nepoch:{num_epochs:4d} | "
                         f"iters:{epoch_iter + 1:4d} | "
@@ -217,14 +252,6 @@ class Training:
         for _ in range(CFG.steps_gen):
             self.gen.update_gen(self.dis, self.final_target_state)
 
-        # -- Fidelity evaluation --
-        if epoch_iter % CFG.save_fid_and_loss_every_x_iter == 0:
-            with torch.no_grad():
-                final_gen_eval = get_final_gen_state_torch(self.gen.total_gen_state).reshape(-1)
-            fid, loss = compute_fidelity_and_cost(self.dis, self.final_target_state, final_gen_eval)
-            fidelities.append(fid)
-            losses.append(loss)
-
     # -- Batching (Haar random states) ------------------
     def _train_step_batch(self, epoch_iter: int, fidelities: list, losses: list):
         """One training iteration in Haar batch mode.
@@ -238,7 +265,7 @@ class Training:
         dim = 2**CFG.system_size
 
         # -- Generate Haar batch for each iter (includes ancilla |0> if needed) --
-        batch_raw, batch_inputs = haar_random_batch(dim, B)
+        batch_raw, batch_inputs = get_random_batch(dim, B)
         batch_targets = prepare_batch_targets(batch_raw, batch_inputs, self.target_op)
 
         # -- Discriminator: detached generator states, averaged loss --
@@ -265,16 +292,37 @@ class Training:
                 batch_targets=batch_targets,
             )
 
-        # -- Fidelity evaluation: average over batch --
-        if epoch_iter % CFG.save_fid_and_loss_every_x_iter == 0:
-            with torch.no_grad():
-                eval_gen = [
-                    get_final_gen_state_torch(self.gen.get_total_gen_state(inp)).reshape(-1) for inp in batch_inputs
-                ]
-            fid_sum, loss_sum = 0.0, 0.0
-            for t, g in zip(batch_targets, eval_gen):
-                f, l = compute_fidelity_and_cost(self.dis, t, g)
-                fid_sum += f
-                loss_sum += l
-            fidelities.append(fid_sum / B)
-            losses.append(loss_sum / B)
+    # -- Evaluation (separated from training) ------------------
+    def _evaluate_choi(self, fidelities: list, losses: list) -> None:
+        """Evaluate fidelity and loss on the fixed |\Phi^+> state."""
+        with torch.no_grad():
+            final_gen_eval = get_final_gen_state_torch(self.gen.total_gen_state).reshape(-1)
+        fid, loss = compute_fidelity_and_cost(
+            self.dis, self.final_target_state, final_gen_eval
+        )
+        fidelities.append(fid)
+        losses.append(loss)
+
+    def _evaluate_batch(self, fidelities: list, losses: list) -> None:
+        """Evaluate unitary process fidelity + loss on the fixed eval batch.
+
+        Process fidelity is computed from U_gen (via qml.matrix) vs U_target,
+        matching the Choi-mode fidelity exactly:
+            F = |Tr(U_t^dagger U_g)|^2 / d^2
+        The loss still uses the eval batch + discriminator since it depends on
+        the discriminator state.
+        """
+        with torch.no_grad():
+            U_gen = extract_gen_unitary(self.gen)
+            fid = process_fidelity(U_gen, self.target_op)
+
+            eval_gen = [
+                get_final_gen_state_torch(self.gen.get_total_gen_state(inp)).reshape(-1)
+                for inp in self.eval_inputs
+            ]
+        loss_sum = 0.0
+        for t, g in zip(self.eval_targets, eval_gen):
+            _, l = compute_fidelity_and_cost(self.dis, t, g)
+            loss_sum += l
+        fidelities.append(fid)
+        losses.append(loss_sum / len(self.eval_inputs))
