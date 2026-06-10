@@ -59,7 +59,6 @@ def haar_random_batch(dim: int, batch_size: int) -> list[torch.Tensor]:
     """Generate batch of Haar-random pure states, with ancilla if needed.
     In this case, we reuse the vector for the target (we multiply the target Unitary to the vector)
     and for the generator (we transform vector to quantum state using qml.StatePrep)
-    (See Lecture 3- Henry Yuen)
 
     Args:
         dim: Dimension of the system Hilbert space (2^system_size).
@@ -80,25 +79,82 @@ def haar_random_batch(dim: int, batch_size: int) -> list[torch.Tensor]:
         batch_inputs.append(torch.kron(v, ancilla_zero) if CFG.extra_ancilla else v)
     return batch_raw, batch_inputs
 
+# -- DETERMINISTIC ALL-PAIRS STATE SET ---------------------
+# Cached module-level: built once on first use, reused across all iterations.
+# A new build is triggered only when dim changes (e.g. between experiments).
+_DET_STATES: list[torch.Tensor] | None = None
+_DET_DIM: int | None = None
+ 
+ 
+def _build_deterministic_state_set(dim: int) -> list[torch.Tensor]:
+    """Build the all-pairs deterministic state set for unitary identification.
+
+    Args:
+        dim: Hilbert space dimension d = 2^n.
+ 
+    Returns:
+        List of d(d+1)/2 torch tensors of shape (dim,), dtype complex64.
+        Order: |0>, |1>, ..., |d-1>, (|0>+|1>)/sqrt(2), (|0>+|2>)/sqrt(2), ...
+    """
+    states: list[torch.Tensor] = []
+ 
+    # Basis states |j>
+    for j in range(dim):
+        v = torch.zeros(dim, dtype=torch.complex64)
+        v[j] = 1.0
+        states.append(v)
+ 
+    # Pair superpositions 
+    inv_sqrt2 = 1.0 / np.sqrt(2.0)
+    for i in range(dim):
+        for j in range(i + 1, dim):
+            v = torch.zeros(dim, dtype=torch.complex64)
+            v[i] = inv_sqrt2
+            v[j] = inv_sqrt2
+            states.append(v)
+ 
+    return states
+ 
+def deterministic_batch_size(dim: int) -> int:
+    """Return M = d(d+1)/2, the size of the deterministic all-pairs set."""
+    return dim * (dim + 1) // 2
+ 
 def comp_random_batch(dim: int, batch_size: int) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-    """Generate a batch of computational basis states |k>, k uniform in [0, dim).
-    (Find some way to avoid repetition)
-    Same return signature as haar_random_batch:
-        - batch_raw   : states without ancilla (dim,)
-        - batch_inputs: with |0> kron'd in if CFG.extra_ancilla (2*dim,)
+    """Return a random subset of the deterministic all-pairs state set.
+
+    The full set has size M = d(d+1)/2. If `batch_size >= M` (or <= 0) the
+    full set is returned; otherwise `batch_size` states are drawn uniformly
+    at random without replacement from the cached set.
+
+    Args:
+        dim: Hilbert space dimension d = 2^n.
+        batch_size: Number of states to draw, in [1, M]. Values >= M return
+                    the full set.
 
     Returns:
-        (batch_raw, batch_inputs)
+        (batch_raw, batch_inputs):
+            batch_raw    : list of dim-vectors (no ancilla), length = batch_size.
+            batch_inputs : list of (dim,) or (2*dim,) vectors depending on
+                           CFG.extra_ancilla; ancilla is kron'd with |0⟩.
     """
+    global _DET_STATES, _DET_DIM
+    # Build (or rebuild if dim changed) the cached state set.
+    if _DET_STATES is None or _DET_DIM != dim:
+        _DET_STATES = _build_deterministic_state_set(dim)
+        _DET_DIM = dim
+
+    max_bs = deterministic_batch_size(dim)
+    if batch_size <= 0 or batch_size >= max_bs:
+        selected = list(_DET_STATES)
+    else:
+        idx = torch.randperm(max_bs)[:batch_size].tolist()
+        selected = [_DET_STATES[i] for i in idx]
+
     ancilla_zero = torch.tensor([1.0, 0.0], dtype=torch.complex64)
-    batch_raw = []
-    batch_inputs = []
-    for _ in range(batch_size):
-        k = int(np.random.randint(0, dim))
-        v = torch.zeros(dim, dtype=torch.complex64)
-        v[k] = 1.0
-        batch_raw.append(v)
-        batch_inputs.append(torch.kron(v, ancilla_zero) if CFG.extra_ancilla else v)
+    batch_raw: list[torch.Tensor] = list(selected)
+    batch_inputs: list[torch.Tensor] = [
+        torch.kron(v, ancilla_zero) if CFG.extra_ancilla else v for v in selected
+    ]
     return batch_raw, batch_inputs
 
 def get_random_batch(dim: int, batch_size: int) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
@@ -132,7 +188,6 @@ def prepare_batch_targets(
         return [(target_op @ psi).reshape(-1) for psi in batch_inputs]
     else:
         return [(target_op @ psi).reshape(-1) for psi in batch_raw]
-
 
 # -- ANCILLA POST-PROCESSING -----------------------------
 def _project_ancilla_zero(state: torch.Tensor, renormalize: bool = True) -> tuple[torch.Tensor, torch.Tensor]:

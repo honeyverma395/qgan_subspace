@@ -32,7 +32,7 @@ Pipeline:
   6. Manifest is grouped BY SEED: four consecutive rows per seed, in the
      order [no_ancilla, ancilla_total, ancilla_bridge, ancilla_shortBridge].
 
-Design choices kept from the previous script:
+More things:
   - Shared Discriminator PER SIZE-FAMILY (no_anc vs with_anc).
   - type_of_warm_start = "none" so the loaded theta is used as-is.
   - Manifest flushed after every cell, atomic rename, so partial
@@ -72,18 +72,15 @@ CONFIGS = [
     "ancilla_shortBridge",
 ]
 # Deciles taken from the REF_CONFIG distribution.
-DECILES = [1, 5, 10]
+DECILES = [1, 10]
 
-N_PER_CELL  = 50
+N_PER_CELL  = 5
 N_DECILES   = 10
 SEED_PICKER = 0           # for reproducible decile-pool sampling
 SEEDS_ROOT  = "decile_seeds"
 TRAIN_ROOT  = "decile_training"
 
 # Fields to re-apply from config.txt onto CFG before building anything.
-# These are the ones that determine Generator's n_params, the circuit
-# topology, and the target. NOT training hyperparameters (epochs, l_rate,
-# steps_*, etc.), those come from your live config.py because the
 _CIRCUIT_FIELDS = (
     "use_choi",
     "batch_size",
@@ -108,10 +105,9 @@ _CIRCUIT_FIELDS = (
 )
 # --------------------------------------------------------------------
 
-
+DIS_SEED_OFFSET = 10_000_000  
 # Deterministic mapping (decile_ref, rep, config) -> experiment index.
 # Order: outer loop over DECILES, then rep within decile, then CONFIGS.
-# This keeps the on-disk layout grouped by seed, matching the CSV.
 CELL_ORDER = [
     (d, r, c)
     for d in DECILES
@@ -172,8 +168,7 @@ def apply_variance_config_to_cfg(parsed: dict, fields: tuple = _CIRCUIT_FIELDS) 
     """Overwrite the listed CFG fields with values from `parsed`.
 
     Returns the dict of {field: (old, new)} for fields that were actually
-    changed, for logging only. Missing fields in `parsed` are skipped:
-    we don't error, the variance run may simply not have logged them.
+    changed, for logging only.
     """
     changed: dict = {}
     for f in fields:
@@ -312,6 +307,33 @@ def write_manifest(manifest_path: str, rows: list[dict]) -> None:
         w.writerows(rows)
     os.replace(tmp_path, manifest_path)
 
+#--Helper Discriminator
+
+def _seed_all(seed: int) -> None:
+    """Seed the RNGs that Discriminator() can access in __init__.
+    
+    This is called just before constructing a Discriminator so that its initialisation
+    is fully deterministic with respect to the `seed`.
+    """
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def build_fresh_discriminator(seed_id: int) -> Discriminator:
+    """Create a new Discriminator with deterministic initialisation in seed_id.
+    
+    CFG must already be in the correct configuration (using _apply_config)
+    before calling this, because Discriminator().size depends on
+    extra_ancilla.
+    
+    The DIS_SEED_OFFSET offset separates the Discriminator’s seed space from that
+    used by anything else (selector, training RNGs, etc.), so that
+    they do not collide unintentionally.
+    """
+    _seed_all(DIS_SEED_OFFSET + seed_id)
+    return Discriminator()
 
 # -- Main ------------------------------------------------------------
 def main() -> None:
@@ -322,7 +344,7 @@ def main() -> None:
     if not os.path.isdir(src_dir):
         raise FileNotFoundError(src_dir)
 
-    # -- (NEW) Replay the circuit config from the variance run -------
+    # -- Replay the circuit config from the variance run -------
     # This is the key step: we read the config.txt that variance_analysis
     # wrote into src_dir and overwrite the relevant CFG fields. Generator
     # then sees the SAME settings that produced the .npy on disk, so its
@@ -381,47 +403,10 @@ def main() -> None:
                 f"CRN seed reuse across configs is not safe."
             )
 
-    # -- Shared discriminators per size-family ------------------------
-    # CFG.ancilla_mode == "pass" makes Discriminator.size depend on
-    # extra_ancilla, so there are two size-families:
-    #   - no_ancilla  -> size = N  (or 2N with Choi)
-    #   - any ancilla -> size = N+1  (or 2N+1 with Choi)
-    # We build ONE Discriminator per family, shared across all cells of
-    # that family. This keeps the discriminator out of the variance budget
-    # WITHIN a family, while the cross-family comparison already has the
-    # ancilla qubit as a non-comparable axis.
-    snapshot = _snapshot_cfg()
-    dis_by_config: dict[str, Discriminator] = {}
-    _built_for_no_anc = False
-    _built_for_with_anc = False
-    try:
-        for cname in CONFIGS:
-            _apply_config(cname)
-            if cname == "no_ancilla":
-                if not _built_for_no_anc:
-                    dis_no_anc = Discriminator()
-                    _built_for_no_anc = True
-                    print(f"Built shared Discriminator for family 'no_ancilla' "
-                          f"(size = {dis_no_anc.size}).")
-                dis_by_config[cname] = dis_no_anc
-            else:
-                if not _built_for_with_anc:
-                    dis_with_anc = Discriminator()
-                    _built_for_with_anc = True
-                    print(f"Built shared Discriminator for family 'with_ancilla' "
-                          f"(size = {dis_with_anc.size}).")
-                dis_by_config[cname] = dis_with_anc
-    finally:
-        _restore_cfg(snapshot)
-
     # -- Build a generator-probe per config (reused across all cells) --
-    # We don't recreate Generator() for every seed; we just overwrite
-    # its params via materialize_checkpoint.
-    #
+
     # Diagnostic: print the CFG state that each Generator sees, plus the
     # resulting n_params and the on-disk thetas width. They MUST match.
-    # If they don't even now (after replaying config.txt), something
-    # downstream still differs: check the parser's coverage of the file.
     gen_probe_by_cfg: dict[str, Generator] = {}
     snapshot_gp = _snapshot_cfg()
     try:
@@ -483,13 +468,8 @@ def main() -> None:
                 seed_id_int = int(seed_id)
 
                 for config_name in CONFIGS:
-                    # Activate this config's CFG flags so save_model /
-                    # Training pick up the right architecture.
                     _apply_config(config_name)
 
-                    # Where the materialized checkpoint will live.
-                    # We tag the directory with decile_ref + rep so that
-                    # the same seed is grouped on disk too.
                     load_ts_rel = os.path.join(
                         SEEDS_ROOT, VARIANCE_TIMESTAMP,
                         config_name,
@@ -499,13 +479,18 @@ def main() -> None:
                         _PROJECT_ROOT, "generated_data", load_ts_rel
                     )
 
-                    # Materialize gen+dis for THIS config at THIS seed_id.
+                    # Dis fresco, sembrado por seed_id: las 4 configs del mismo
+                    # seed_id ven EL MISMO dis inicial (acoplamiento CRN), y
+                    # seeds distintos ven dis distintos. Sin contaminación de orden.
+                    fresh_dis = build_fresh_discriminator(seed_id_int)
+
                     materialize_checkpoint(
                         gen_probe_by_cfg[config_name],
-                        dis_by_config[config_name],
+                        fresh_dis,
                         thetas_by_cfg[config_name][seed_id_int],
                         ckpt_dir,
                     )
+
 
                     # Train.
                     status = "ok"
@@ -552,6 +537,15 @@ def main() -> None:
     print(f"\nSaved manifest: {manifest_path}")
     print(f"  total cells: {len(manifest_rows)}  ok: {n_ok}  failed: {n_fail}")
 
+    # Auto-run the decile/fidelity migration analysis on the just-finished run.
+    print("\n Post Building decile + fidelity migration tables and heatmaps...")
+    try:
+        from variance import decile_migration
+        decile_migration.run(VARIANCE_TIMESTAMP)
+    except Exception as e:
+        import traceback
+        print(f"Post migration analysis failed: {type(e).__name__}: {e}")
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()

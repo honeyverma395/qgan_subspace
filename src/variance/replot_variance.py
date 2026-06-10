@@ -58,16 +58,15 @@ from variance.variance_analysis import (
 )
 
 # ---- EDIT HERE ------------------------------------------------------
-TIMESTAMP = "3_1_XXXZZZ"
+TIMESTAMP = "Try_3_C_ZZZ"
 CONFIGS = [
     "no_ancilla",
     "ancilla_total",
     "ancilla_bridge",
     "ancilla_shortBridge",
 ]
-OUT_NAME = "variance_plot.png"
 XLIM: tuple[float, float] | None = None
-YLIM: tuple[float, float] | None = None  # (1e-4, 1e-1)
+YLIM: tuple[float, float] | None = (1e-4, 1e-1)  # (1e-4, 1e-1)
 
 # Diagnostics knobs
 RUN_DIAGNOSTICS = True
@@ -373,6 +372,66 @@ def _plot_estimator_comparison(
     plt.close(fig)
     print(f"Saved estimator comparison: {out_path}")
 
+def plot_mad_sweep(
+    diags: dict,
+    splits: dict,
+    out_path: str,
+    n_sys_params: int,
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+) -> None:
+    """Same layout as plot_variance_sweep, but the y-axis is the robust
+    estimator (1.4826*MAD)^2 per parameter instead of Var.
+
+    System markers (circles) and ancilla-only markers (triangles) per config,
+    with a vertical divider at the system/ancilla boundary.
+    """
+    fig, ax = plt.subplots(figsize=(11, 6))
+
+    for name, d in diags.items():
+        color = COLOR_MAP.get(name)
+        sys_idx, anc_idx = splits[name]
+        mad = d["mad_sigma2"]
+        mad_sys = mad[sys_idx]
+        mad_anc = mad[anc_idx] if anc_idx.size > 0 else np.array([])
+
+        xs_sys = np.arange(len(mad_sys))
+        ax.scatter(xs_sys, mad_sys, color=color, marker="o", s=28,
+                   alpha=0.75, label=f"{name} (system)")
+
+        if mad_anc.size > 0:
+            xs_anc = np.arange(n_sys_params, n_sys_params + len(mad_anc))
+            ax.scatter(xs_anc, mad_anc, color=color, marker="^", s=42,
+                       alpha=0.9, edgecolors="black", linewidths=0.5,
+                       label=f"{name} (ancilla)")
+
+    ax.axvline(n_sys_params - 0.5, color="black", linestyle=":",
+               linewidth=1.0, alpha=0.6,
+               label=f"system / ancilla boundary (k={n_sys_params})")
+
+    ax.set_yscale("log")
+    ax.set_xlabel("parameter index k")
+    ax.set_ylabel(r"$(1.4826\,\mathrm{MAD})^2[\partial W / \partial \theta_k]$")
+    if CFG.use_choi:
+        mode_str = "Choi"
+    else:
+        mode_str = f"{CFG.batch_mode} B={CFG.batch_size}"
+    ax.set_title(
+        f"Robust variance (MAD) per parameter  "
+        f"({CFG.system_size} qubits, {CFG.gen_layers} layers, "
+        f"ansatz={CFG.gen_ansatz}, {mode_str})"
+    )
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize=8, loc="best", ncol=2)
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    print(f"Saved MAD sweep: {out_path}")
 
 # -- Norm-per-sample distribution ----------------------------------------
 def _plot_norm_distribution(
@@ -642,19 +701,16 @@ def _plot_GOP_spectrum(
 ) -> None:
     """Canonical Abbas-style figure: sorted eigenvalues, log-y.
 
-    One line per config, x = index (1..n_nonzero), y = lambda_a.
-    Visually shows:
-      - how steeply the spectrum falls (slope) -> concentration
-      - how far the useful tail extends (where it hits numerical floor)
-      - absolute separation between configs
+    One line per config, x = index (1..n_nonzero), y = lambda_a / tr(F).
+    Trace-normalized: shows only the spectrum shape, removing global scale
+    differences so the configs are directly comparable.
 
     Args:
         block_label: "full" or "system block only" — appears in titles.
                      Does NOT change the math; the restriction must already
                      be reflected in GOP_by_config.
     """
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    ax_raw, ax_norm = axes
+    fig, ax = plt.subplots(figsize=(8, 5))
 
     for name, d in GOP_by_config.items():
         color = COLOR_MAP.get(name, "gray")
@@ -663,25 +719,16 @@ def _plot_GOP_spectrum(
             continue
 
         x = np.arange(1, eig.size + 1)
-        ax_raw.plot(x, eig, marker="o", markersize=4, linewidth=1.4,
-                    color=color, label=name, alpha=0.85)
-
-        # Normalized by the trace: shows only the spectrum shape,
-        # removing global scale differences
         eig_norm = eig / eig.sum()
-        ax_norm.plot(x, eig_norm, marker="o", markersize=4, linewidth=1.4,
-                     color=color, label=name, alpha=0.85)
+        ax.plot(x, eig_norm, marker="o", markersize=4, linewidth=1.4,
+                color=color, label=name, alpha=0.85)
 
-    for ax in axes:
-        ax.set_yscale("log")
-        ax.set_xlabel("eigenvalue index $a$  (sorted decreasing)")
-        ax.grid(True, which="both", alpha=0.3)
-        ax.legend(fontsize=9, loc="best")
-
-    ax_raw.set_ylabel(r"$\lambda_a$  (raw)")
-    ax_raw.set_title("Empirical GOP spectrum (raw)")
-    ax_norm.set_ylabel(r"$\lambda_a / \mathrm{tr}(F)$  (normalized)")
-    ax_norm.set_title("Empirical GOP spectrum (trace-normalized)")
+    ax.set_yscale("log")
+    ax.set_xlabel("eigenvalue index $a$  (sorted decreasing)")
+    ax.set_ylabel(r"$\lambda_a / \mathrm{tr}(F)$")
+    ax.set_title("Empirical GOP spectrum (trace-normalized)")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize=9, loc="best")
 
     if CFG.use_choi:
         mode_str = "Choi"
@@ -846,51 +893,32 @@ def _plot_decile_analysis(
     block_label: str = "full",
     stratifier_label: str = r"$\|g\|^2$",
 ) -> None:
-    """Four panels: trace contribution, PR_norm, stable rank, lambda_max
-    as a function of decile, one line per config.
+    """Two panels: PR_norm and lambda_max as a function of decile,
+    one line per config.
 
     Args:
         block_label: "full" or "system block only" — appears in titles.
         stratifier_label: LaTeX label for the stratifying quantity.
                           e.g. r"$\\|g\\|^2$" or r"$\\|g_\\mathrm{sys}\\|^2$".
     """
-    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
-    ax_frac, ax_pr, ax_sr, ax_lam = axes.flat
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    ax_pr, ax_lam = axes
 
     for name, d in decile_by_config.items():
         color = COLOR_MAP.get(name, "gray")
         n_dec = d["n_deciles"]
         x = np.arange(1, n_dec + 1)
 
-        ax_frac.plot(x, d["trace_frac_per_decile"], marker="o",
-                     markersize=5, linewidth=1.6, color=color,
-                     label=name, alpha=0.85)
         ax_pr.plot(x, d["pr_norm_per_decile"], marker="o",
                    markersize=5, linewidth=1.6, color=color,
                    label=name, alpha=0.85)
-
-        sr_norm = (d["stable_rank_per_decile"]
-                   / np.maximum(d["rank_cap_per_decile"], 1))
-        ax_sr.plot(x, sr_norm, marker="o", markersize=5, linewidth=1.6,
-                   color=color, label=name, alpha=0.85)
 
         ax_lam.plot(x, d["lambda_max_per_decile"], marker="o",
                     markersize=5, linewidth=1.6, color=color,
                     label=name, alpha=0.85)
 
-    # Panel 1: fraction of the trace
-    ax_frac.set_xlabel(f"decile of {stratifier_label}  (D1 = lowest)")
-    ax_frac.set_ylabel("fraction of $\\mathrm{tr}(F_{\\mathrm{total}})$")
-    ax_frac.set_title("Where the signal lives")
-    ax_frac.axhline(1.0 / N_DECILES, color="black", linestyle=":",
-                    linewidth=0.8, alpha=0.5,
-                    label=f"uniform (1/{N_DECILES})")
-    ax_frac.grid(True, alpha=0.3)
-    ax_frac.legend(fontsize=8, loc="best")
-    ax_frac.set_yscale("log")
-
-    # Panel 2: normalized PR
-    ax_pr.set_xlabel(f"decile of {stratifier_label}")
+    # Panel 1: normalized PR
+    ax_pr.set_xlabel(f"decile of {stratifier_label}  (D1 = lowest)")
     ax_pr.set_ylabel(r"PR$_\mathrm{spec}$ / rank cap")
     ax_pr.set_title("Directional structure per decile")
     ax_pr.set_ylim(0, 1.1)
@@ -899,16 +927,8 @@ def _plot_decile_analysis(
     ax_pr.grid(True, alpha=0.3)
     ax_pr.legend(fontsize=8, loc="best")
 
-    # Panel 3: normalized stable rank
-    ax_sr.set_xlabel(f"decile of {stratifier_label}")
-    ax_sr.set_ylabel("stable rank / rank cap")
-    ax_sr.set_title("Spectral concentration per decile")
-    ax_sr.set_ylim(0, 1.1)
-    ax_sr.grid(True, alpha=0.3)
-    ax_sr.legend(fontsize=8, loc="best")
-
-    # Panel 4: lambda max
-    ax_lam.set_xlabel(f"decile of {stratifier_label}")
+    # Panel 2: lambda max
+    ax_lam.set_xlabel(f"decile of {stratifier_label}  (D1 = lowest)")
     ax_lam.set_ylabel(r"$\lambda_{\max}(F_j)$")
     ax_lam.set_title("Largest local eigenvalue per decile")
     ax_lam.set_yscale("log")
@@ -983,13 +1003,14 @@ def _plot_abs_mean_per_param(
     print(f"Saved abs-mean-per-param: {out_path}")
 
 # -- Main ----------------------------------
-def replot():
-    out_dir = os.path.join(_PROJECT_ROOT, "variance_analysis", TIMESTAMP)
+def replot(timestamp: str | None = None):
+    ts = timestamp if timestamp is not None else TIMESTAMP
+    out_dir = os.path.join(_PROJECT_ROOT, "variance_analysis", ts)
     if not os.path.isdir(out_dir):
         raise FileNotFoundError(f"Not found: {out_dir}")
 
     # Mirror everything we print to a .txt log in the same folder
-    log_path = os.path.join(out_dir, f"diagnostics_{TIMESTAMP}.txt")
+    log_path = os.path.join(out_dir, f"diagnostics_{ts}.txt")
     log_file = open(log_path, "w")
     original_stdout = sys.stdout
     sys.stdout = _write_and_print(original_stdout, log_file)
@@ -1119,19 +1140,16 @@ def replot():
             print("No configs loaded, nothing to plot.")
             return
 
-        plot_path = os.path.join(out_dir, OUT_NAME)
-        plot_variance_sweep(results, plot_path, n_sys_params_ref or 0,
-                            xlim=XLIM, ylim=YLIM)
-        print(f"\nSaved: {plot_path}")
-
+        # MAD-based "variance" plot 
         if RUN_DIAGNOSTICS and diags:
-            hist_path = os.path.join(out_dir, f"hist_{TIMESTAMP}.png")
-            _plot_histograms(diags, grads_by_config, splits, hist_path)
+            mad_path = os.path.join(out_dir, "mad_plot.png")
+            plot_mad_sweep(diags, splits, mad_path, n_sys_params_ref or 0,
+                           xlim=XLIM, ylim=YLIM)
+            print(f"\nSaved: {mad_path}")
 
-            est_path = os.path.join(out_dir, f"estimators_{TIMESTAMP}.png")
-            _plot_estimator_comparison(
-                diags, splits, est_path, n_sys_params_ref or 0
-            )
+            hist_path = os.path.join(out_dir, f"hist_{ts}.png")
+            # _plot_histograms(diags, grads_by_config, splits, hist_path)
+            # estimator comparison disabled on purpose
 
         if RUN_NORM_DIST and grads_by_config:
             norm_path = os.path.join(out_dir, f"gradient_norm_{TIMESTAMP}.png")

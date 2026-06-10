@@ -50,9 +50,17 @@ from variance.variance_analysis import (
 # ---- EDIT HERE ------------------------------------------------------
 # (n_qubits, batch_or_"choi") : timestamp folder
 RUNS: dict[tuple, str] = {
-    (3, "choi"):   "3_C_ZZZ_NO",
-    (4, "choi"):   "4_C_ZZZ_NO",
+    (3, 1):   "3_1_ZZZ",
+    (3, 5):   "3_5_ZZZ",
+    (3, "choi"):   "3_C_ZZZ",
+    (4, 1):   "4_1_ZZZ",
+    (4, 5):   "4_5_ZZZ",
+    (4, "choi"):   "4_C_ZZZ",
+    (5, 1):   "5_1_ZZZ",
+    (5, 5):   "5_5_ZZZ",
 }
+
+FIRST_DIM = "n"   # "n" for system size, "L" for layers
 
 CONFIGS = [
     "no_ancilla",
@@ -62,15 +70,15 @@ CONFIGS = [
 ]
 
 # Change the name to not overwrite the plot
-OUT_NAME = "ZZZNo.png" 
-YLIM: tuple[float, float] | None = (1e-5, 1e2)     # (1e-4, 1e-1)
-TRIM_FRAC = 0.01     # trim top + bottom 1% of samples for trimmed Var
+OUT_NAME = "HamiltonianZZZ.png" 
+YLIM: tuple[float, float] | None = None    # (1e-4, 1e-1)
+TRIM_FRAC = 0.0000000001     # trim top + bottom 1% of samples for trimmed Var
 
 # Series toggles
 SHOW_TOTAL  = False   # system+ancilla (pastel markers), if False, only system-only
 SHOW_MAD    = True   # mean_k((1.4826·MAD_i)^2)  — square
-SHOW_TVAR   = True   # mean_k(trimmed Var_i)     — triangle
-SHOW_MEDIAN = True   # mean_k(|median_i(g_k)|)  — circle
+SHOW_TVAR   = False   # mean_k(trimmed Var_i)     — triangle
+SHOW_MEDIAN = False   # mean_k(|median_i(g_k)|)  — circle
 SHOW_MEAN   = False   # mean_k(|mean_i(g_k)|)    — cross 
 # ---------------------------------------------------------------------
 
@@ -235,7 +243,7 @@ def _xlabel(key: tuple, info: dict | None = None) -> str:
     else:
         # Surface non-Haar modes explicitly (e.g. comp_basis)
         bottom = f"B={b}\n{mode}"
-    return f"n={n}\n{bottom}"  # Change n with L for layers comparison
+    return f"{FIRST_DIM}={n}\n{bottom}"
 
 def _parse_config_txt(path: str) -> dict:
     """Parse `key: value` and `key = value` lines from a saved config.txt."""

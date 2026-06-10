@@ -320,6 +320,14 @@ def sample_gradients_coupled(
         # Generate a shared seed to ensure the Discriminator is identical for all configs
         dis_seed = np.random.randint(0, 2**31 - 1)
 
+        if not CFG.use_choi:
+            dim_shared = 2 ** CFG.system_size
+            target_op = torch.tensor(get_target_operator(), dtype=torch.complex64)
+            batch_raw, batch_inputs = get_random_batch(dim_shared, CFG.batch_size)
+            batch_targets = prepare_batch_targets(
+                batch_raw, batch_inputs, target_op
+            )
+
         for name in configs:
             _apply_config(name)
             try:
@@ -328,14 +336,6 @@ def sample_gradients_coupled(
                 # Build the target state based on the current config's dimension
                 if CFG.use_choi:
                     target_state = _build_target_state()
-                else:
-                    target_op = torch.tensor(
-                        get_target_operator(), dtype=torch.complex64
-                    )
-                    dim = 2 ** CFG.system_size
-                    B = CFG.batch_size
-                    batch_raw, batch_inputs = get_random_batch(dim, B)
-                    batch_targets = prepare_batch_targets(batch_raw, batch_inputs, target_op)
 
                 # Initialize the Discriminator. 
                 # We isolate the RNG state here so the shared seed doesn't permanently 
@@ -629,6 +629,9 @@ def run_sweep() -> None:
 
     print(f"\nDone. All outputs in: {out_dir}")
 
+    # Run the diagnostic replot on the freshly-generated run
+    from variance.replot_variance import replot  
+    replot(timestamp)
 
 if __name__ == "__main__":
     run_sweep()

@@ -265,6 +265,22 @@ def _build_qnode():
 
     return circuit
 
+def get_circuit_specs(circuit, n_params: int, total_wires: int) -> dict:
+    """Run qml.specs on a dummy forward pass and extract depth/gate counts."""
+    dummy_params = torch.zeros(n_params, dtype=torch.float32)
+    dummy_state = torch.zeros(2 ** total_wires, dtype=torch.complex64)
+    dummy_state[0] = 1.0
+
+    specs_fn = qml.specs(circuit)
+    raw = specs_fn(dummy_params, dummy_state)
+
+    gate_sizes = raw.get("resources").gate_sizes  # {n_qubits: count}
+    return {
+        "depth": raw["resources"].depth,
+        "total_gates": raw["resources"].num_gates,
+        "gates_1q": gate_sizes.get(1, 0),
+        "gates_2q": gate_sizes.get(2, 0),
+    }
 
 # -- GENERATOR CLASS -------------------------------------------
 class Generator:
@@ -300,6 +316,7 @@ class Generator:
 
         # -- circuit ---------
         self.circuit = _build_qnode()
+
         # In choi representation we always use the same initial state,
         # so we created once and save it
         # In batching we have different states, thus no need to save the state

@@ -40,14 +40,13 @@ from tools.plot_hub import (
 #     "Total",
 # ]
 
-time_stamp_to_replot = "decile_training/Try_3_C_ZZZ"
+time_stamp_to_replot = "gradient"
 max_fidelity = 0.99
 
 # -- Decile mode --------------------------------------------------------
-# Set to True for outputs of decile_training_crn.py. Skips the standard
-# scatter / histogram plots (they don't make sense with 1 rep per
-# experiment<N>) and produces one scatter_plot_D<dd>.png per decile.
-DECILE_MODE = True
+# Set to True for outputs of decile_training_crn.py.  
+# and produces one scatter_plot_D<dd>.png per decile.
+DECILE_MODE = False
 
 # Optional: explicit path to manifest.csv. If None, auto-discovered from
 # decile_seeds/<VTS>/manifest.csv (sibling of decile_training/<VTS>).
@@ -67,11 +66,12 @@ DECILE_CONFIG_DISPLAY = {
     "ancilla_shortBridge": "shortBridge",
 }
 
-# Standard-mode-only fields (ignored when DECILE_MODE is True).
+# If Decile_MODE is False
+# Standard-mode-only fields 
 x_label = "Ancilla Topology"
 run_names = [
     "Ansatz",
-    "Short Bridge",
+    "ShortBridge",
     "Bridge",
     "Total",
 ]
@@ -108,13 +108,34 @@ else:
     )
 
     # -- Replotting for the specified Barren Plateau --------------
-    focus_plateau_ids = None  # None, [1,5]
+    focus_plateau_ids = None # None, [1,5]
     if focus_plateau_ids:
-        from tools.plot_hub import plot_grad_trajectory_by_plateau
+        from tools.plot_hub import (plot_grad_trajectory_by_plateau,
+                                    plot_grad_norm_trajectory_by_plateau,
+                                    plot_grad_pr_trajectory_by_plateau
+                                )
         plot_grad_trajectory_by_plateau(
             base_path, log_path, n_runs,
             plateau_ids=focus_plateau_ids,
             run_names=run_names,
             include_control=True,
             include_initial=True,
+            fid_stride=1,            
+        )
+        plot_grad_norm_trajectory_by_plateau(
+            base_path, log_path, n_runs,
+            plateau_ids=focus_plateau_ids,
+            run_names=run_names,
+            include_control=True,
+            include_initial=True,
+            fid_stride = 1,
+        )
+        plot_grad_pr_trajectory_by_plateau(
+            base_path, log_path, n_runs,
+            plateau_ids=focus_plateau_ids,
+            run_names=run_names,
+            include_control=True,
+            include_initial=True,
+            fid_stride=1,
+            window=20,
         )

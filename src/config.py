@@ -42,9 +42,9 @@ class Config:
 
         # -- Training mode ----------------------------
         # use_choi: True = Choi representation, False = Haar random batching
-        self.use_choi: bool = False
-        self.batch_size: int = 10  # Only for Haar/Comp random 
-        self.batch_mode: Literal["haar", "comp"] = "haar"
+        self.use_choi: bool = True
+        self.batch_size: int = 8  # Only for Haar/Comp random 
+        self.batch_mode: Literal["haar", "comp"] = "comp"
 
         self.eval_batch_size = 20
         self.eval_seed = 1234   
@@ -52,20 +52,10 @@ class Config:
         # Configurations to compare (each dict overrides CFG attributes):
         self.reps_new_config: list[dict[str, Any]] = [
             {
-                "extra_ancilla": True,
-                "ancilla_mode": "pass",
-                "ancilla_topology": "ansatz",
-                "ancilla_connect_to": None,
-                "do_ancilla_1q_gates": True,
-                "start_ancilla_gates_randomly": True,
-                "ancilla_coupling_layers": "all",
-                "ancilla_training": True
-            },
-            {
-                "extra_ancilla": True,
+                "extra_ancilla": False,
                 "ancilla_mode": "pass",
                 "ancilla_topology": "bridge",
-                "ancilla_connect_to": 1,
+                "ancilla_connect_to": None,
                 "do_ancilla_1q_gates": True,
                 "start_ancilla_gates_randomly": True,
                 "ancilla_coupling_layers": "all",
@@ -102,8 +92,8 @@ class Config:
         # -- Training ------------------------------------------
         self.epochs: int = 10
         self.iterations_epoch: int = 300
-        self.save_fid_and_loss_every_x_iter: int = 10
-        self.log_every_x_iter: int = 10  # Must be a multiple of save_fid_and_loss_every_x_iter
+        self.save_fid_and_loss_every_x_iter: int = 20
+        self.log_every_x_iter: int = 20  # Must be a multiple of save_fid_and_loss_every_x_iter
         self.max_fidelity: float = 0.99  # Stop button
         # In GANs, we can choose that the Discriminador learn faster than the Generator, or vice versa.
         self.steps_dis: int = 1
@@ -124,7 +114,7 @@ class Config:
         #   trace   : trace out ancilla, sample pure state
         self.system_size: int = 3
         self.extra_ancilla: bool = False # We begin with no extra qubits, but we add once we reach the Plateau
-        self.gen_layers: int = 3
+        self.gen_layers: int = 1
         # Ancilla mode define what happens to the ancilla before Discriminator (ancilla.py)
         self.ancilla_mode: Optional[Literal["pass", "project", "trace"]] = "pass"
         self.ancilla_project_norm: Optional[Literal["re-norm", "pass"]] = "re-norm"
@@ -158,8 +148,8 @@ class Config:
         #   Available: I, X, Y, Z, XX, XZ, ZZ, ZZZ, ZZZZ, XZX, XXXX
         self.time_to_evolve: float = 1.0  # Time to evolve with the Hamiltonian, for the target state preparation.
         self.target_hamiltonian: Literal["cluster_h", "rotated_surface_h", "ising_h", "custom_h"] = "custom_h"
-        self.custom_hamiltonian_terms: Optional[list[str]] = ["ZZZ"]
-        self.custom_hamiltonian_strengths: Optional[list[float]] = [1.0]
+        self.custom_hamiltonian_terms: Optional[list[str]] = ["ZZZ","XXX"]
+        self.custom_hamiltonian_strengths: Optional[list[float]] = [1.0,0.4]
         # -- Optimiser --------------------------------------
         self.l_rate: float = 0.01
         self.momentum_coeff: float = 0.9

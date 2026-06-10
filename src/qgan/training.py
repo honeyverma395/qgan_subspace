@@ -33,7 +33,9 @@ from qgan.ancilla import (
     get_random_batch,
     prepare_batch_targets,
     extract_gen_unitary, 
-    process_fidelity
+    process_fidelity,
+    deterministic_batch_size,
+    haar_random_batch
 )
 from qgan.cost_functions import compute_fidelity_and_cost
 from qgan.discriminator import Discriminator
@@ -60,10 +62,14 @@ class Training:
             1. Maximally entangled state |\Phi^+> (+ ancilla if needed).
             2. Target state: (I \otimes U_target [\otimes I_ancilla]) |\Phi^+>.
 
-        Haar batch mode:
-            1. Pre-compute target unitary U_target.
-            2. Batch of Haar-random states generated each iteration.
-            3. Target states: U_target |\psi_i> (extended with ancilla if needed).
+        Batch modes (use_choi=False):
+            - "haar": fresh Haar-random batch of size CFG.batch_size each iter.
+            - "comp": full deterministic all-pairs set of size d(d+1)/2 each iter.
+            Target states: U_target |\psi_i> (with ancilla if needed).
+ 
+        Evaluation (use_choi=False):
+            Always Haar-random states, seeded with CFG.eval_seed, of size
+            CFG.eval_batch_size. Reused across runs as the generalisation probe.
         """
         # -- Target operator --------
         self.target_op = torch.tensor(get_target_operator(), dtype=torch.complex64)
@@ -74,6 +80,16 @@ class Training:
             initial_state = torch.tensor(np.asarray(initial_state_final), dtype=torch.complex64).reshape(-1)
 
             self.final_target_state = (self.target_op @ initial_state).reshape(-1)
+
+        if not CFG.use_choi and CFG.batch_mode == "comp":
+            dim = 2**CFG.system_size
+            M = deterministic_batch_size(dim)
+            if CFG.batch_size > M:
+                print_and_log(
+                    f"batch_size {CFG.batch_size} -> {M} (capped at d(d+1)/2 for d={dim}).",
+                    CFG.log_path,
+                )
+                CFG.batch_size = M
 
         # Generator: variational quantum circuit
         self.gen: Generator = Generator()
@@ -97,7 +113,7 @@ class Training:
             torch.manual_seed(eval_seed)
             np.random.seed(eval_seed)
             try:
-                self.eval_raw, self.eval_inputs = get_random_batch(
+                self.eval_raw, self.eval_inputs = haar_random_batch(
                     dim, self.eval_batch_size
                 )
                 self.eval_targets = prepare_batch_targets(
@@ -119,8 +135,11 @@ class Training:
         Choi mode:
             Each iteration uses the fixed |\Phi^+> state.
 
-        Haar batch mode:
-            Each iteration generates a fresh batch of B Haar-random states.
+        Batch mode (haar or comp):
+            Each iteration draws B states via `get_random_batch`:
+              - "haar": fresh Haar-random sample of size CFG.batch_size.
+              - "comp": full deterministic all-pairs set of size d(d+1)/2
+                        (CFG.batch_size was overridden to this value in __init__).
             Loss and gradients are averaged over the batch (mini-batch SGD).
 
         Stops when max_fidelity is reached or max epochs is reached.
@@ -252,13 +271,18 @@ class Training:
         for _ in range(CFG.steps_gen):
             self.gen.update_gen(self.dis, self.final_target_state)
 
-    # -- Batching (Haar random states) ------------------
+    # -- Batching (random states) ------------------
     def _train_step_batch(self, epoch_iter: int, fidelities: list, losses: list):
-        """One training iteration in Haar batch mode.
-
-        1. Generate Haar-random states  (with ancilla |0⟩ if needed).
-        2. Compute target states: U_target|\psi_i> for each.
-        3. Discriminator (maximise) and Generator (minimise)
+        """One training iteration in batch mode (Haar or deterministic).
+ 
+        1. Draw B input states via `get_random_batch`:
+            - "haar": fresh Haar-random sample of size CFG.batch_size.
+            - "comp": the FULL deterministic all-pairs set of size
+                      M = d(d+1)/2 (CFG.batch_size is overridden to M in
+                      __init__, and `get_random_batch` returns the cached
+                      set on every call).
+        2. Compute target states: U_target|ψ_i⟩ for each.
+        3. Discriminator (maximise) and Generator (minimise).
         4. Evaluate average fidelity over batch periodically.
         """
         B = CFG.batch_size
